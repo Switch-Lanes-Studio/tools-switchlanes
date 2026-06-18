@@ -40,7 +40,10 @@
       <section class="panel">
         <div class="panel-head">
           <h2>2 · Clusters</h2>
-          <button id="addClusterBtn" class="btn small">+ Category</button>
+          <div style="display:flex;gap:6px">
+            <button id="suggestBtn" class="btn small ghost" title="Propose categories from the active dataset">✨ Suggest</button>
+            <button id="addClusterBtn" class="btn small">+ Category</button>
+          </div>
         </div>
         <div id="clusterList" class="cluster-list"></div>
         <p class="hint">A keyword joins a category if it matches <em>every</em> "must contain" rule and <em>none</em> of the "exclude" rules. Each rule is an OR-list of words.</p>
@@ -117,6 +120,23 @@
         <button type="submit" class="btn">Save category</button>
       </div>
     </form>
+  </dialog>
+
+  <!-- Suggested categories dialog -->
+  <dialog id="suggestDialog" class="dialog wide">
+    <div class="suggest-head">
+      <h3>Suggested categories</h3>
+      <p id="suggestSubtitle" class="hint" style="margin:0"></p>
+    </div>
+    <div class="suggest-toolbar">
+      <label class="check-inline"><input type="checkbox" id="suggestSelectAll" /> Select all</label>
+      <span id="suggestSelectedCount" class="hint" style="margin:0"></span>
+    </div>
+    <div id="suggestList" class="suggest-list"></div>
+    <div class="dialog-actions">
+      <button type="button" id="suggestCancelBtn" class="btn ghost">Cancel</button>
+      <button type="button" id="suggestAddBtn" class="btn">Add selected</button>
+    </div>
   </dialog>
 
   <script type="module" src="js/app.js"></script>

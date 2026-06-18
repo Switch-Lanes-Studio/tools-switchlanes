@@ -134,6 +134,22 @@ body {
 .rule .icon-btn:hover { color: var(--danger); }
 .dialog-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 10px; }
 
+/* Suggestions dialog */
+.dialog.wide { width: min(640px, 94vw); }
+.suggest-head { margin-bottom: 10px; }
+.suggest-head h3 { margin: 0 0 4px; }
+.suggest-toolbar { display: flex; align-items: center; justify-content: space-between; padding: 6px 0; border-bottom: 1px solid var(--line); margin-bottom: 8px; }
+.check-inline { display: flex; align-items: center; gap: 6px; color: var(--muted); font-size: 13px; cursor: pointer; }
+.suggest-list { max-height: 52vh; overflow-y: auto; display: flex; flex-direction: column; gap: 6px; }
+.suggest-item { display: flex; gap: 10px; align-items: flex-start; background: var(--panel-2); border: 1px solid var(--line); border-radius: 8px; padding: 9px 11px; }
+.suggest-item input[type=checkbox] { margin-top: 3px; }
+.suggest-item .body { flex: 1; min-width: 0; }
+.suggest-item .title-row { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
+.suggest-item .nm { font-weight: 600; }
+.suggest-item .vol { color: var(--accent-2); font-weight: 600; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.suggest-item .ex { color: var(--muted); font-size: 12px; margin-top: 3px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.suggest-empty { color: var(--muted); padding: 16px 4px; }
+
 /* Toast */
 .toast { position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%); background: var(--panel-2); border: 1px solid var(--line); color: var(--text); padding: 10px 16px; border-radius: 8px; box-shadow: var(--shadow); z-index: 50; }
 .toast.err { border-color: var(--danger); }

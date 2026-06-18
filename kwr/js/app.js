@@ -2,6 +2,7 @@
 import { parseGkp, monthLabel, MONTH_LABELS } from './parser.js';
 import { runProject, uncovered, seasonality } from './engine.js';
 import { sampleDatasets, sampleClusters } from './sample.js';
+import { suggestCategories } from './suggest.js';
 
 const AUTOSAVE_KEY = 'kct.autosave.v1';
 const PALETTE = ['#4f8cff', '#36c08e', '#ffb454', '#ff5c6c', '#b072ff', '#26c6da', '#f06292', '#9ccc65', '#ffca28', '#8d6e63'];
@@ -206,6 +207,52 @@ function saveClusterFromDialog() {
     state.clusters.push({ id: uid(), name, includes, excludes });
   }
   recompute();
+}
+
+// ---------- Suggested categories ----------
+let suggestions = [];
+function openSuggestDialog() {
+  const ds = activeDataset();
+  if (!ds) { toast('Upload a dataset first.', true); return; }
+  suggestions = suggestCategories(ds, state.clusters);
+  const host = $('#suggestList');
+  $('#suggestSubtitle').textContent = `Based on ${fmt(ds.keywords.length)} keywords in “${ds.label || ds.fileName}”, ranked by search volume. Tick the ones to add.`;
+  if (!suggestions.length) {
+    host.innerHTML = '<div class="suggest-empty">No new categories to suggest — everything is already covered, or the dataset is too small.</div>';
+  } else {
+    host.innerHTML = suggestions.map((s, i) => `
+      <label class="suggest-item">
+        <input type="checkbox" data-i="${i}" />
+        <span class="body">
+          <span class="title-row"><span class="nm">${escapeHtml(s.name)}</span><span class="vol">${fmt(s.volume)} · ${fmt(s.count)} kw</span></span>
+          <span class="ex">contains “${escapeHtml(s.term)}” — e.g. ${escapeHtml(s.examples.join(', '))}</span>
+        </span>
+      </label>`).join('');
+  }
+  $('#suggestSelectAll').checked = false;
+  updateSuggestCount();
+  $('#suggestDialog').showModal();
+}
+function updateSuggestCount() {
+  const n = $('#suggestList').querySelectorAll('input[type=checkbox]:checked').length;
+  $('#suggestSelectedCount').textContent = n ? `${n} selected` : '';
+  $('#suggestAddBtn').textContent = n ? `Add ${n} categor${n === 1 ? 'y' : 'ies'}` : 'Add selected';
+}
+function addSelectedSuggestions() {
+  const checks = $('#suggestList').querySelectorAll('input[type=checkbox]:checked');
+  if (!checks.length) { $('#suggestDialog').close(); return; }
+  const existingNames = new Set(state.clusters.map((c) => c.name.toLowerCase()));
+  let added = 0;
+  checks.forEach((cb) => {
+    const s = suggestions[Number(cb.dataset.i)];
+    if (!s || existingNames.has(s.name.toLowerCase())) return;
+    state.clusters.push({ id: uid(), name: s.name, includes: [{ mode: 'words', terms: [s.term] }], excludes: [] });
+    existingNames.add(s.name.toLowerCase());
+    added++;
+  });
+  $('#suggestDialog').close();
+  recompute();
+  toast(`Added ${added} categor${added === 1 ? 'y' : 'ies'}`);
 }
 
 // ---------- Dashboard ----------
@@ -447,7 +494,16 @@ function init() {
   $('#addDataBtn').onclick = () => $('#dataFileInput').click();
   $('#dataFileInput').onchange = (e) => { handleFiles(e.target.files); e.target.value = ''; };
   $('#addClusterBtn').onclick = () => openClusterDialog(null);
+  $('#suggestBtn').onclick = openSuggestDialog;
   $('#loadSampleBtn').onclick = loadSample;
+
+  $('#suggestCancelBtn').onclick = () => $('#suggestDialog').close();
+  $('#suggestAddBtn').onclick = addSelectedSuggestions;
+  $('#suggestSelectAll').onchange = (e) => {
+    $('#suggestList').querySelectorAll('input[type=checkbox]').forEach((cb) => { cb.checked = e.target.checked; });
+    updateSuggestCount();
+  };
+  $('#suggestList').onchange = updateSuggestCount;
 
   $('#projectName').oninput = (e) => { state.name = e.target.value; autosave(); };
   $('#newProjectBtn').onclick = () => { if (confirm('Start a new project? Unsaved data will be cleared.')) { state = blankState(); detailKey = null; recompute(); } };
