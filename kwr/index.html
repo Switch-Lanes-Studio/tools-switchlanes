@@ -65,9 +65,10 @@
             <h3>Search volume by category</h3>
             <canvas id="barChart"></canvas>
           </div>
-          <div class="card chart-card">
+          <div class="card chart-card" id="trendCard">
             <h3>Trend over time</h3>
             <canvas id="trendChart"></canvas>
+            <p id="trendNote" class="hint" hidden>This export has no month-by-month data — only average monthly searches — so trends and seasonality aren’t available. Re-export from Keyword Planner with the monthly columns to enable this.</p>
           </div>
         </div>
         <div class="card">
@@ -135,6 +136,7 @@
     <div id="suggestList" class="suggest-list"></div>
     <div class="dialog-actions">
       <button type="button" id="suggestCancelBtn" class="btn ghost">Cancel</button>
+      <button type="button" id="suggestMergeBtn" class="btn ghost">Merge selected</button>
       <button type="button" id="suggestAddBtn" class="btn">Add selected</button>
     </div>
   </dialog>

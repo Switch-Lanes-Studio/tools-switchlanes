@@ -25,13 +25,53 @@ const fmt = (n) => (n || 0).toLocaleString('en-US');
 function activeDataset() {
   return state.datasets.find((d) => d.id === state.activeDatasetId) || null;
 }
-// (Re)tag every keyword with its search intent. Call when datasets/roles change.
+// (Re)tag every keyword with its search intent + flag whether the dataset has
+// real month-by-month data. Call when datasets/roles change.
 function annotateAll() {
-  if (state.datasets.length) annotateIntents(state.datasets);
+  if (!state.datasets.length) return;
+  annotateIntents(state.datasets);
+  for (const d of state.datasets) {
+    d.hasMonthly = d.months.length > 0 && d.keywords.some((k) => k.monthly.some((v) => v > 0));
+  }
 }
 function intentChip(intent) {
   const m = INTENT_META[intent] || INTENT_META.other;
   return `<span class="chip" style="--c:${m.color}">${m.label}</span>`;
+}
+const selectedClusters = new Set();
+function escapeRe(s) { return String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); }
+
+// Build one category that matches a keyword if it matches ANY of the sources
+// (union). Clean words-rule for the common case; folds into a single regex only
+// when a source uses regex / multiple AND-ed rules (flagged via `approx`).
+function mergeCategories(cats, name) {
+  const terms = new Set(), exTerms = new Set();
+  const regexInc = [], regexExc = [];
+  let approx = false;
+  for (const c of cats) {
+    if ((c.includes || []).length > 1) approx = true;
+    for (const r of c.includes || []) {
+      if (r.mode === 'regex') { regexInc.push(r.pattern); approx = true; }
+      else (r.terms || []).forEach((t) => terms.add(t));
+    }
+    for (const r of c.excludes || []) {
+      if (r.mode === 'regex') regexExc.push(r.pattern);
+      else (r.terms || []).forEach((t) => exTerms.add(t));
+    }
+  }
+  let includes;
+  if (regexInc.length) {
+    const parts = [];
+    if (terms.size) parts.push(`(${[...terms].map(escapeRe).join('|')})`);
+    parts.push(...regexInc.map((p) => `(?:${p})`));
+    includes = [{ mode: 'regex', pattern: parts.join('|') }];
+  } else {
+    includes = [{ mode: 'words', terms: [...terms] }];
+  }
+  const excludes = [];
+  if (exTerms.size) excludes.push({ mode: 'words', terms: [...exTerms] });
+  regexExc.forEach((p) => excludes.push({ mode: 'regex', pattern: p })); // exclude-on-any = OR, safe
+  return { cluster: { id: uid(), name, includes, excludes }, approx };
 }
 
 // ---------- Recompute + render pipeline ----------
@@ -120,13 +160,28 @@ function renderClusters() {
     host.innerHTML = '<p class="hint">No categories yet.</p>';
     return;
   }
+  // Clean up selection ids that no longer exist.
+  for (const id of [...selectedClusters]) if (!state.clusters.some((c) => c.id === id)) selectedClusters.delete(id);
+
+  if (selectedClusters.size) {
+    const bar = document.createElement('div');
+    bar.className = 'merge-bar';
+    bar.innerHTML = `<span>${selectedClusters.size} selected</span>
+      <span><button class="btn tiny" id="mergeSelBtn" ${selectedClusters.size < 2 ? 'disabled' : ''}>Merge…</button>
+      <button class="btn tiny ghost" id="clearSelBtn">Clear</button></span>`;
+    host.appendChild(bar);
+    bar.querySelector('#mergeSelBtn').onclick = mergeSelectedClusters;
+    bar.querySelector('#clearSelBtn').onclick = () => { selectedClusters.clear(); renderClusters(); };
+  }
+
   const byId = Object.fromEntries(results.map((r) => [r.cluster.id, r]));
   for (const c of state.clusters) {
     const r = byId[c.id];
     const el = document.createElement('div');
-    el.className = 'cluster-item' + (r && r.errors.length ? ' err' : '');
+    el.className = 'cluster-item' + (r && r.errors.length ? ' err' : '') + (selectedClusters.has(c.id) ? ' sel' : '');
     el.innerHTML = `
       <div class="row1">
+        <label class="cl-check"><input type="checkbox" data-sel="${c.id}" ${selectedClusters.has(c.id) ? 'checked' : ''} title="Select to merge" /></label>
         <span class="name">${escapeHtml(c.name)}</span>
         <span class="stat">${r ? fmt(r.totalVolume) : '–'}</span>
       </div>
@@ -140,14 +195,34 @@ function renderClusters() {
         </span>
       </div>
       ${r && r.errors.length ? `<div class="meta" style="color:var(--danger)">regex error: ${escapeHtml(r.errors[0])}</div>` : ''}`;
+    el.querySelector('[data-sel]').onchange = (e) => {
+      if (e.target.checked) selectedClusters.add(c.id); else selectedClusters.delete(c.id);
+      renderClusters();
+    };
     el.querySelector('[data-edit]').onclick = () => openClusterDialog(c.id);
     el.querySelector('[data-view]').onclick = () => { detailKey = c.id; renderDashboard(); };
     el.querySelector('[data-delc]').onclick = () => {
       state.clusters = state.clusters.filter((x) => x.id !== c.id);
+      selectedClusters.delete(c.id);
       recompute();
     };
     host.appendChild(el);
   }
+}
+
+function mergeSelectedClusters() {
+  const cats = state.clusters.filter((c) => selectedClusters.has(c.id));
+  if (cats.length < 2) { toast('Select at least two categories to merge.', true); return; }
+  const def = cats[0].name;
+  const name = window.prompt(`Merge ${cats.length} categories into one. Name:`, def);
+  if (name === null) return;
+  const { cluster, approx } = mergeCategories(cats, name.trim() || def);
+  const firstIdx = state.clusters.findIndex((c) => c.id === cats[0].id);
+  state.clusters = state.clusters.filter((c) => !selectedClusters.has(c.id));
+  state.clusters.splice(Math.max(0, firstIdx), 0, cluster);
+  selectedClusters.clear();
+  recompute();
+  toast(approx ? `Merged ${cats.length} categories (advanced rules were broadened to OR)` : `Merged ${cats.length} categories`);
 }
 
 function ruleSummary(c) {
@@ -277,6 +352,23 @@ function addSelectedSuggestions() {
   recompute();
   toast(`Added ${added} categor${added === 1 ? 'y' : 'ies'}`);
 }
+function mergeSelectedSuggestions() {
+  const checks = $('#suggestList').querySelectorAll('input[type=checkbox]:checked');
+  if (checks.length < 2) { toast('Tick at least two proposals to merge them.', true); return; }
+  const chosen = [...checks].map((cb) => suggestions[Number(cb.dataset.i)]).filter(Boolean);
+  const def = chosen.slice(0, 2).map((s) => s.name).join(' + ');
+  const name = window.prompt(`Merge ${chosen.length} proposals into one category. Name:`, def);
+  if (name === null) return;
+  // Treat each proposal as a one-rule category, then union.
+  const cats = chosen.map((s) => ({ name: s.name, includes: [s.include], excludes: [] }));
+  const { cluster } = mergeCategories(cats, name.trim() || def);
+  const exists = new Set(state.clusters.map((c) => c.name.toLowerCase()));
+  if (exists.has(cluster.name.toLowerCase())) cluster.name += ' (merged)';
+  state.clusters.push(cluster);
+  $('#suggestDialog').close();
+  recompute();
+  toast(`Merged ${chosen.length} proposals into “${cluster.name}”`);
+}
 
 // ---------- Dashboard ----------
 function renderActiveBar() {
@@ -336,6 +428,18 @@ function renderBarChart() {
 
 function renderTrendChart() {
   const ds = activeDataset();
+  // Some GKP exports carry only avg. monthly searches (no monthly breakdown).
+  const note = $('#trendNote');
+  const canvas = $('#trendChart');
+  if (!ds.hasMonthly) {
+    charts.trend?.destroy();
+    charts.trend = null;
+    canvas.hidden = true;
+    note.hidden = false;
+    return;
+  }
+  canvas.hidden = false;
+  note.hidden = true;
   const labels = ds.months.map(monthLabel);
   const datasets = results.map((r, i) => ({
     label: r.cluster.name,
@@ -524,6 +628,7 @@ function init() {
 
   $('#suggestCancelBtn').onclick = () => $('#suggestDialog').close();
   $('#suggestAddBtn').onclick = addSelectedSuggestions;
+  $('#suggestMergeBtn').onclick = mergeSelectedSuggestions;
   $('#suggestSelectAll').onchange = (e) => {
     $('#suggestList').querySelectorAll('input[type=checkbox]').forEach((cb) => { cb.checked = e.target.checked; });
     updateSuggestCount();
