@@ -3,6 +3,7 @@ import { parseGkp, monthLabel, MONTH_LABELS } from './parser.js';
 import { runProject, uncovered, seasonality } from './engine.js';
 import { sampleDatasets, sampleClusters } from './sample.js';
 import { suggestCategories } from './suggest.js';
+import { annotateIntents, INTENT_META } from './intent.js';
 
 const AUTOSAVE_KEY = 'kct.autosave.v1';
 const PALETTE = ['#4f8cff', '#36c08e', '#ffb454', '#ff5c6c', '#b072ff', '#26c6da', '#f06292', '#9ccc65', '#ffca28', '#8d6e63'];
@@ -23,6 +24,14 @@ const fmt = (n) => (n || 0).toLocaleString('en-US');
 
 function activeDataset() {
   return state.datasets.find((d) => d.id === state.activeDatasetId) || null;
+}
+// (Re)tag every keyword with its search intent. Call when datasets/roles change.
+function annotateAll() {
+  if (state.datasets.length) annotateIntents(state.datasets);
+}
+function intentChip(intent) {
+  const m = INTENT_META[intent] || INTENT_META.other;
+  return `<span class="chip" style="--c:${m.color}">${m.label}</span>`;
 }
 
 // ---------- Recompute + render pipeline ----------
@@ -68,7 +77,7 @@ function renderDatasets() {
     el.querySelector('.name').onclick = () => { state.activeDatasetId = d.id; recompute(); };
     el.querySelector('[data-del]').onclick = () => removeDataset(d.id);
     el.querySelector('[data-label]').onchange = (e) => { d.label = e.target.value; recompute(); };
-    el.querySelector('[data-role]').onchange = (e) => { d.role = e.target.value; recompute(); };
+    el.querySelector('[data-role]').onchange = (e) => { d.role = e.target.value; annotateAll(); recompute(); };
     host.appendChild(el);
   }
 }
@@ -94,6 +103,7 @@ async function handleFiles(fileList) {
         keywords: parsed.keywords,
       });
       state.activeDatasetId = state.datasets[state.datasets.length - 1].id;
+      annotateAll();
       toast(`Loaded ${fmt(parsed.keywords.length)} keywords from ${file.name}`);
     } catch (e) {
       toast(e.message, true);
@@ -220,14 +230,27 @@ function openSuggestDialog() {
   if (!suggestions.length) {
     host.innerHTML = '<div class="suggest-empty">No new categories to suggest — everything is already covered, or the dataset is too small.</div>';
   } else {
-    host.innerHTML = suggestions.map((s, i) => `
-      <label class="suggest-item">
+    const item = (s, i) => {
+      const rule = s.include.mode === 'regex'
+        ? 'matches question words'
+        : `contains “${escapeHtml(s.include.terms.length > 3 ? s.include.terms.slice(0, 3).join(', ') + '…' : s.include.terms.join(', '))}”`;
+      return `<label class="suggest-item">
         <input type="checkbox" data-i="${i}" />
         <span class="body">
-          <span class="title-row"><span class="nm">${escapeHtml(s.name)}</span><span class="vol">${fmt(s.volume)} · ${fmt(s.count)} kw</span></span>
-          <span class="ex">contains “${escapeHtml(s.term)}” — e.g. ${escapeHtml(s.examples.join(', '))}</span>
+          <span class="title-row">
+            <span class="nm">${escapeHtml(s.name)} ${intentChip(s.intent)}</span>
+            <span class="vol">${fmt(s.volume)} · ${fmt(s.count)} kw</span>
+          </span>
+          <span class="ex">${rule} — e.g. ${escapeHtml(s.examples.join(', '))}</span>
         </span>
-      </label>`).join('');
+      </label>`;
+    };
+    const strategic = suggestions.map((s, i) => [s, i]).filter(([s]) => s.type !== 'theme');
+    const themes = suggestions.map((s, i) => [s, i]).filter(([s]) => s.type === 'theme');
+    let html = '';
+    if (strategic.length) html += `<div class="suggest-group">Strategic groups · intent & questions</div>` + strategic.map(([s, i]) => item(s, i)).join('');
+    if (themes.length) html += `<div class="suggest-group">Themes · by search volume</div>` + themes.map(([s, i]) => item(s, i)).join('');
+    host.innerHTML = html;
   }
   $('#suggestSelectAll').checked = false;
   updateSuggestCount();
@@ -246,7 +269,7 @@ function addSelectedSuggestions() {
   checks.forEach((cb) => {
     const s = suggestions[Number(cb.dataset.i)];
     if (!s || existingNames.has(s.name.toLowerCase())) return;
-    state.clusters.push({ id: uid(), name: s.name, includes: [{ mode: 'words', terms: [s.term] }], excludes: [] });
+    state.clusters.push({ id: uid(), name: s.name, includes: [s.include], excludes: [] });
     existingNames.add(s.name.toLowerCase());
     added++;
   });
@@ -366,19 +389,20 @@ function renderDetail(ds) {
   const thead = $('#detailTable thead');
   const tbody = $('#detailTable tbody');
   thead.innerHTML = `<tr>
-    <th>Keyword</th><th class="num">Avg. monthly</th>
+    <th>Keyword</th><th class="num">Avg. monthly</th><th>Intent</th>
     <th class="num">3-mo change</th><th class="num">YoY change</th><th>Competition</th>
   </tr>`;
   tbody.innerHTML = rows.slice(0, 1000).map((k) => `<tr>
     <td>${escapeHtml(k.keyword)}</td>
     <td class="num">${fmt(k.avgMonthly)}</td>
+    <td>${intentChip(k.intent)}</td>
     <td class="num ${changeClass(k.threeMonth)}">${escapeHtml(k.threeMonth)}</td>
     <td class="num ${changeClass(k.yoy)}">${escapeHtml(k.yoy)}</td>
     <td>${escapeHtml(k.competition)}</td>
-  </tr>`).join('') || `<tr><td colspan="5" style="color:var(--muted)">No keywords.</td></tr>`;
+  </tr>`).join('') || `<tr><td colspan="6" style="color:var(--muted)">No keywords.</td></tr>`;
 
   if (rows.length > 1000) {
-    tbody.innerHTML += `<tr><td colspan="5" style="color:var(--muted)">Showing first 1000 of ${fmt(rows.length)}. Export for the full list.</td></tr>`;
+    tbody.innerHTML += `<tr><td colspan="6" style="color:var(--muted)">Showing first 1000 of ${fmt(rows.length)}. Export for the full list.</td></tr>`;
   }
 }
 function changeClass(v) {
@@ -397,8 +421,8 @@ function currentDetailRows() {
 }
 function exportRows(format) {
   const rows = currentDetailRows();
-  const aoa = [['Keyword', 'Avg. monthly searches', 'Three month change', 'YoY change', 'Competition']];
-  rows.forEach((k) => aoa.push([k.keyword, k.avgMonthly, k.threeMonth, k.yoy, k.competition]));
+  const aoa = [['Keyword', 'Avg. monthly searches', 'Intent', 'Three month change', 'YoY change', 'Competition']];
+  rows.forEach((k) => aoa.push([k.keyword, k.avgMonthly, (INTENT_META[k.intent] || INTENT_META.other).label, k.threeMonth, k.yoy, k.competition]));
   const name = (detailKey === '__uncovered__' ? 'uncovered' : (results.find((r) => r.cluster.id === detailKey)?.cluster.name || 'keywords')).replace(/[^\w-]+/g, '_');
   if (format === 'xlsx') {
     const ws = XLSX.utils.aoa_to_sheet(aoa);
@@ -432,6 +456,7 @@ function loadProjectFromObject(obj) {
     clusters: obj.clusters || [],
   };
   detailKey = null;
+  annotateAll();
   recompute();
 }
 async function loadProjectFile(file) {
@@ -550,6 +575,7 @@ function loadSample() {
   };
   state.activeDatasetId = state.datasets[0].id;
   detailKey = null;
+  annotateAll();
   recompute();
   toast('Sample data loaded');
 }
