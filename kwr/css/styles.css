@@ -115,6 +115,11 @@ body {
 .card-actions { display: flex; gap: 8px; align-items: center; }
 .card-actions select { background: var(--panel-2); border: 1px solid var(--line); color: var(--text); padding: 6px 8px; border-radius: 7px; }
 
+/* Intent legend */
+.intent-legend { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-bottom: 10px; }
+.intent-legend .legend-label { color: var(--muted); font-size: 12px; }
+.intent-legend .legend-item { cursor: help; }
+
 /* Table */
 .table-wrap { max-height: 460px; overflow: auto; border: 1px solid var(--line); border-radius: 8px; }
 .kw-table { width: 100%; border-collapse: collapse; font-size: 13px; }

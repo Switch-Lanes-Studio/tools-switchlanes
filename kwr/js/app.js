@@ -38,6 +38,18 @@ function intentChip(intent) {
   const m = INTENT_META[intent] || INTENT_META.other;
   return `<span class="chip" style="--c:${m.color}">${m.label}</span>`;
 }
+const INTENT_HELP = {
+  transactional: 'Ready to act — book, buy, price, cheap',
+  commercial: 'Comparing options — best, vs, review, ideas',
+  informational: 'Learning — how, what, guide, questions',
+  navigational: 'A specific brand or site (from your competitor/brand data)',
+  other: 'No clear intent signal in the keyword',
+};
+function renderIntentLegend() {
+  const order = ['transactional', 'commercial', 'informational', 'navigational', 'other'];
+  $('#intentLegend').innerHTML = '<span class="legend-label">Intent:</span>' +
+    order.map((k) => `<span class="legend-item" title="${escapeHtml(INTENT_HELP[k])}">${intentChip(k)}</span>`).join('');
+}
 const selectedClusters = new Set();
 function escapeRe(s) { return String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); }
 
@@ -663,6 +675,7 @@ function init() {
     if (e.dataTransfer.files.length) handleFiles(e.dataTransfer.files);
   });
 
+  renderIntentLegend();
   if (location.search.includes('demo')) {
     loadSample();
   } else {
