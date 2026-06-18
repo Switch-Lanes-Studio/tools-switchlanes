@@ -69,10 +69,10 @@ export function sampleDatasets() {
 
 export function sampleClusters() {
   return [
-    { id: 'c_honeymoon', name: 'Huwelijksreizen', includes: [{ mode: 'words', terms: ['reis', 'honey'] }], excludes: [{ mode: 'words', terms: ['hout', 'rond', 'ikea', 'stoel', 'teak'] }] },
-    { id: 'c_bali', name: 'Bali', includes: [{ mode: 'words', terms: ['bali'] }], excludes: [] },
-    { id: 'c_italie', name: 'Italië', includes: [{ mode: 'words', terms: ['italie', 'toscane'] }], excludes: [] },
-    { id: 'c_goedkoop', name: 'Goedkope', includes: [{ mode: 'words', terms: ['goedkope', 'betaalbare', 'budget'] }], excludes: [] },
-    { id: 'c_tui', name: 'TUI', includes: [{ mode: 'words', terms: ['tui'] }], excludes: [] },
+    { id: 'c_honeymoon', name: 'Huwelijksreizen', parentId: null, includes: [{ mode: 'words', terms: ['reis', 'honey'] }], excludes: [{ mode: 'words', terms: ['hout', 'rond', 'ikea', 'stoel', 'teak'] }] },
+    { id: 'c_bali', name: 'Bali', parentId: 'c_honeymoon', includes: [{ mode: 'words', terms: ['bali'] }], excludes: [] },
+    { id: 'c_italie', name: 'Italië', parentId: 'c_honeymoon', includes: [{ mode: 'words', terms: ['italie', 'toscane'] }], excludes: [] },
+    { id: 'c_goedkoop', name: 'Goedkope', parentId: 'c_honeymoon', includes: [{ mode: 'words', terms: ['goedkope', 'betaalbare', 'budget'] }], excludes: [] },
+    { id: 'c_tui', name: 'TUI', parentId: 'c_honeymoon', includes: [{ mode: 'words', terms: ['tui'] }], excludes: [] },
   ];
 }

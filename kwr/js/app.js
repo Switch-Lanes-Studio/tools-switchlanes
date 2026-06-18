@@ -1,6 +1,6 @@
 // app.js — UI state, rendering, persistence. Ties parser + engine to the DOM.
 import { parseGkp, monthLabel, MONTH_LABELS } from './parser.js';
-import { runProject, uncovered, seasonality } from './engine.js';
+import { runProjectTree, isPillar, uncovered, seasonality } from './engine.js';
 import { sampleDatasets, sampleClusters } from './sample.js';
 import { suggestCategories } from './suggest.js';
 import { annotateIntents, INTENT_META } from './intent.js';
@@ -9,9 +9,12 @@ const AUTOSAVE_KEY = 'kct.autosave.v1';
 const PALETTE = ['#4f8cff', '#36c08e', '#ffb454', '#ff5c6c', '#b072ff', '#26c6da', '#f06292', '#9ccc65', '#ffca28', '#8d6e63'];
 
 let state = blankState();
-let results = [];           // computed cluster results for the active dataset
+let results = [];           // flat scoped cluster results for the active dataset
+let resultsById = {};       // cluster id -> result
+let tree = null;            // { flat, byId, pillars } from runProjectTree
+const collapsedPillars = new Set();
 let charts = { bar: null, trend: null };
-let detailKey = null;       // which cluster id (or '__uncovered__') is shown in the table
+let detailKey = null;       // cluster id, '__uncovered__', or '__ungrouped__:<pillarId>'
 
 function blankState() {
   return { name: '', datasets: [], activeDatasetId: null, clusters: [] };
@@ -89,10 +92,18 @@ function mergeCategories(cats, name) {
 // ---------- Recompute + render pipeline ----------
 function recompute() {
   const ds = activeDataset();
-  results = ds ? runProject(state.clusters, ds) : [];
+  if (ds) {
+    tree = runProjectTree(state.clusters, ds);
+    results = tree.flat;
+    resultsById = tree.byId;
+  } else {
+    tree = null; results = []; resultsById = {};
+  }
   render();
   autosave();
 }
+const pillarsList = () => state.clusters.filter((c) => isPillar(c, state.clusters));
+const childrenOf = (id) => state.clusters.filter((c) => c.parentId === id && !isPillar(c, state.clusters));
 
 function render() {
   renderDatasets();
@@ -186,40 +197,90 @@ function renderClusters() {
     bar.querySelector('#clearSelBtn').onclick = () => { selectedClusters.clear(); renderClusters(); };
   }
 
-  const byId = Object.fromEntries(results.map((r) => [r.cluster.id, r]));
-  for (const c of state.clusters) {
-    const r = byId[c.id];
-    const el = document.createElement('div');
-    el.className = 'cluster-item' + (r && r.errors.length ? ' err' : '') + (selectedClusters.has(c.id) ? ' sel' : '');
-    el.innerHTML = `
-      <div class="row1">
-        <label class="cl-check"><input type="checkbox" data-sel="${c.id}" ${selectedClusters.has(c.id) ? 'checked' : ''} title="Select to merge" /></label>
-        <span class="name">${escapeHtml(c.name)}</span>
-        <span class="stat">${r ? fmt(r.totalVolume) : '–'}</span>
-      </div>
-      <div class="rulesummary">${ruleSummary(c)}</div>
-      <div class="row1" style="margin-top:6px">
-        <span class="meta" style="color:var(--muted);font-size:11px">${r ? fmt(r.count) + ' keywords' : ''}</span>
-        <span class="actions">
-          <button class="btn tiny" data-edit="${c.id}">Edit</button>
-          <button class="btn tiny" data-view="${c.id}">View</button>
-          <button class="icon-btn" data-delc="${c.id}">✕</button>
-        </span>
-      </div>
-      ${r && r.errors.length ? `<div class="meta" style="color:var(--danger)">regex error: ${escapeHtml(r.errors[0])}</div>` : ''}`;
-    el.querySelector('[data-sel]').onchange = (e) => {
-      if (e.target.checked) selectedClusters.add(c.id); else selectedClusters.delete(c.id);
+  for (const p of pillarsList()) {
+    host.appendChild(clusterItem(p, false));
+    if (collapsedPillars.has(p.id)) continue;
+    const kids = childrenOf(p.id);
+    if (!kids.length && !(tree && tree.pillars.find((x) => x.cluster.id === p.id))) continue;
+    const sub = document.createElement('div');
+    sub.className = 'subtree';
+    for (const k of kids) sub.appendChild(clusterItem(k, true));
+    const pt = tree && tree.pillars.find((x) => x.cluster.id === p.id);
+    if (pt && pt.children.length) sub.appendChild(ungroupedRow(p, pt.ungrouped));
+    sub.appendChild(addSubRow(p));
+    host.appendChild(sub);
+  }
+}
+
+function clusterItem(c, isSub) {
+  const r = resultsById[c.id];
+  const el = document.createElement('div');
+  el.className = 'cluster-item' + (isSub ? ' sub' : '') + (r && r.errors.length ? ' err' : '') + (selectedClusters.has(c.id) ? ' sel' : '');
+  const collapsed = collapsedPillars.has(c.id);
+  el.innerHTML = `
+    <div class="row1">
+      ${!isSub ? `<button class="icon-btn chev" data-toggle="${c.id}">${collapsed ? '▸' : '▾'}</button>` : ''}
+      <label class="cl-check"><input type="checkbox" data-sel="${c.id}" ${selectedClusters.has(c.id) ? 'checked' : ''} title="Select to merge" /></label>
+      <span class="name">${escapeHtml(c.name)}</span>
+      <span class="stat">${r ? fmt(r.totalVolume) : '–'}</span>
+    </div>
+    <div class="rulesummary">${ruleSummary(c)}</div>
+    <div class="row1" style="margin-top:6px">
+      <span class="meta" style="color:var(--muted);font-size:11px">${r ? fmt(r.count) + ' keywords' : ''}</span>
+      <span class="actions">
+        ${!isSub ? `<button class="btn tiny ghost" data-suggest="${c.id}" title="Suggest subtopics within this pillar">✨ sub</button>` : ''}
+        <button class="btn tiny" data-edit="${c.id}">Edit</button>
+        <button class="btn tiny" data-view="${c.id}">View</button>
+        <button class="icon-btn" data-delc="${c.id}">✕</button>
+      </span>
+    </div>
+    ${r && r.errors.length ? `<div class="meta" style="color:var(--danger)">regex error: ${escapeHtml(r.errors[0])}</div>` : ''}`;
+  if (!isSub) {
+    el.querySelector('[data-toggle]').onclick = () => {
+      if (collapsed) collapsedPillars.delete(c.id); else collapsedPillars.add(c.id);
       renderClusters();
     };
-    el.querySelector('[data-edit]').onclick = () => openClusterDialog(c.id);
-    el.querySelector('[data-view]').onclick = () => { detailKey = c.id; renderDashboard(); };
-    el.querySelector('[data-delc]').onclick = () => {
-      state.clusters = state.clusters.filter((x) => x.id !== c.id);
-      selectedClusters.delete(c.id);
-      recompute();
-    };
-    host.appendChild(el);
+    el.querySelector('[data-suggest]').onclick = () => openSuggestDialog(c.id);
   }
+  el.querySelector('[data-sel]').onchange = (e) => {
+    if (e.target.checked) selectedClusters.add(c.id); else selectedClusters.delete(c.id);
+    renderClusters();
+  };
+  el.querySelector('[data-edit]').onclick = () => openClusterDialog(c.id);
+  el.querySelector('[data-view]').onclick = () => { detailKey = c.id; renderDashboard(); };
+  el.querySelector('[data-delc]').onclick = () => deleteCluster(c.id);
+  return el;
+}
+
+function ungroupedRow(p, ung) {
+  const el = document.createElement('div');
+  el.className = 'cluster-item sub ungrouped';
+  el.innerHTML = `
+    <div class="row1">
+      <span class="name" style="font-style:italic;color:var(--muted)">Other (ungrouped)</span>
+      <span class="stat" style="color:var(--muted)">${fmt(ung.totalVolume)}</span>
+    </div>
+    <div class="row1" style="margin-top:4px">
+      <span class="meta" style="color:var(--muted);font-size:11px">${fmt(ung.count)} keywords with no subtopic</span>
+      <span class="actions"><button class="btn tiny" data-viewung="${p.id}">View</button></span>
+    </div>`;
+  el.querySelector('[data-viewung]').onclick = () => { detailKey = '__ungrouped__:' + p.id; renderDashboard(); };
+  return el;
+}
+
+function addSubRow(p) {
+  const el = document.createElement('div');
+  el.className = 'add-sub-row';
+  el.innerHTML = `<button class="btn tiny ghost">+ Subcategory</button>`;
+  el.querySelector('button').onclick = () => openClusterDialog(null, p.id);
+  return el;
+}
+
+function deleteCluster(id) {
+  state.clusters = state.clusters.filter((c) => c.id !== id);
+  state.clusters.forEach((c) => { if (c.parentId === id) c.parentId = null; }); // orphans -> top level
+  selectedClusters.delete(id);
+  recompute();
 }
 
 function mergeSelectedClusters() {
@@ -229,8 +290,14 @@ function mergeSelectedClusters() {
   const name = window.prompt(`Merge ${cats.length} categories into one. Name:`, def);
   if (name === null) return;
   const { cluster, approx } = mergeCategories(cats, name.trim() || def);
+  // Keep the shared parent if all sources share one, else make it a pillar.
+  const parents = new Set(cats.map((c) => c.parentId || null));
+  cluster.parentId = parents.size === 1 ? [...parents][0] : null;
+  const mergedIds = new Set(cats.map((c) => c.id));
   const firstIdx = state.clusters.findIndex((c) => c.id === cats[0].id);
-  state.clusters = state.clusters.filter((c) => !selectedClusters.has(c.id));
+  state.clusters = state.clusters.filter((c) => !mergedIds.has(c.id));
+  // Re-home any subtopics of a merged pillar onto the merged result.
+  state.clusters.forEach((c) => { if (mergedIds.has(c.parentId)) c.parentId = cluster.id; });
   state.clusters.splice(Math.max(0, firstIdx), 0, cluster);
   selectedClusters.clear();
   recompute();
@@ -251,14 +318,27 @@ function ruleText(rule) {
 
 // ---------- Cluster editor dialog ----------
 let editingClusterId = null;
-function openClusterDialog(id) {
+function openClusterDialog(id, presetParentId) {
   editingClusterId = id;
-  const c = id ? state.clusters.find((x) => x.id === id) : { name: '', includes: [{ mode: 'words', terms: [] }], excludes: [] };
-  $('#clusterDialogTitle').textContent = id ? 'Edit category' : 'New category';
+  const c = id ? state.clusters.find((x) => x.id === id) : { name: '', includes: [{ mode: 'words', terms: [] }], excludes: [], parentId: presetParentId || null };
+  $('#clusterDialogTitle').textContent = id ? 'Edit category' : (presetParentId ? 'New subcategory' : 'New category');
   $('#clusterNameInput').value = c.name || '';
+  renderParentOptions(c);
   renderRuleRows('include', c.includes && c.includes.length ? c.includes : [{ mode: 'words', terms: [] }]);
   renderRuleRows('exclude', c.excludes || []);
   $('#clusterDialog').showModal();
+}
+function renderParentOptions(c) {
+  const sel = $('#clusterParentInput');
+  // A category with subtopics must stay top-level (2-level cap).
+  const hasKids = c.id && state.clusters.some((x) => x.parentId === c.id);
+  const candidates = pillarsList().filter((p) => p.id !== c.id);
+  let opts = `<option value="">Top-level (pillar)</option>`;
+  for (const p of candidates) opts += `<option value="${p.id}" ${c.parentId === p.id ? 'selected' : ''}>${escapeHtml(p.name)}</option>`;
+  sel.innerHTML = opts;
+  sel.disabled = hasKids;
+  if (hasKids) sel.value = '';
+  $('#clusterParentHint').textContent = hasKids ? 'This category has subtopics, so it stays a top-level pillar.' : '';
 }
 
 function renderRuleRows(kind, rules) {
@@ -297,23 +377,36 @@ function saveClusterFromDialog() {
   const name = $('#clusterNameInput').value.trim() || 'Untitled category';
   const includes = collectRules('include');
   const excludes = collectRules('exclude');
+  const parentId = $('#clusterParentInput').value || null;
   if (editingClusterId) {
     const c = state.clusters.find((x) => x.id === editingClusterId);
-    Object.assign(c, { name, includes, excludes });
+    Object.assign(c, { name, includes, excludes, parentId });
   } else {
-    state.clusters.push({ id: uid(), name, includes, excludes });
+    state.clusters.push({ id: uid(), name, includes, excludes, parentId });
   }
   recompute();
 }
 
 // ---------- Suggested categories ----------
 let suggestions = [];
-function openSuggestDialog() {
+let suggestParentId = null; // when set, accepted proposals become subtopics of this pillar
+function openSuggestDialog(pillarId) {
   const ds = activeDataset();
   if (!ds) { toast('Upload a dataset first.', true); return; }
-  suggestions = suggestCategories(ds, state.clusters);
+  suggestParentId = (typeof pillarId === 'string') ? pillarId : null;
+  let subDs = ds, existing = state.clusters, subtitle;
+  if (suggestParentId) {
+    const pr = resultsById[suggestParentId];
+    const pc = state.clusters.find((c) => c.id === suggestParentId);
+    subDs = { months: ds.months, keywords: pr ? pr.matched : [] };
+    existing = childrenOf(suggestParentId); // its existing subtopics, so they aren't re-proposed
+    subtitle = `Subtopics within “${escapeHtml(pc ? pc.name : '')}”, from its ${fmt(subDs.keywords.length)} keywords. The pillar's own term is filtered out automatically.`;
+  } else {
+    subtitle = `Based on ${fmt(ds.keywords.length)} keywords in “${ds.label || ds.fileName}”, ranked by search volume. Tick the ones to add.`;
+  }
+  suggestions = suggestCategories(subDs, existing);
   const host = $('#suggestList');
-  $('#suggestSubtitle').textContent = `Based on ${fmt(ds.keywords.length)} keywords in “${ds.label || ds.fileName}”, ranked by search volume. Tick the ones to add.`;
+  $('#suggestSubtitle').textContent = subtitle;
   if (!suggestions.length) {
     host.innerHTML = '<div class="suggest-empty">No new categories to suggest — everything is already covered, or the dataset is too small.</div>';
   } else {
@@ -356,7 +449,7 @@ function addSelectedSuggestions() {
   checks.forEach((cb) => {
     const s = suggestions[Number(cb.dataset.i)];
     if (!s || existingNames.has(s.name.toLowerCase())) return;
-    state.clusters.push({ id: uid(), name: s.name, includes: [s.include], excludes: [] });
+    state.clusters.push({ id: uid(), name: s.name, includes: [s.include], excludes: [], parentId: suggestParentId });
     existingNames.add(s.name.toLowerCase());
     added++;
   });
@@ -374,6 +467,7 @@ function mergeSelectedSuggestions() {
   // Treat each proposal as a one-rule category, then union.
   const cats = chosen.map((s) => ({ name: s.name, includes: [s.include], excludes: [] }));
   const { cluster } = mergeCategories(cats, name.trim() || def);
+  cluster.parentId = suggestParentId;
   const exists = new Set(state.clusters.map((c) => c.name.toLowerCase()));
   if (exists.has(cluster.name.toLowerCase())) cluster.name += ' (merged)';
   state.clusters.push(cluster);
@@ -404,14 +498,16 @@ function renderDashboard() {
 }
 
 function renderSummaryCards(ds) {
-  const totalCovered = results.reduce((s, r) => s + r.totalVolume, 0);
   const unc = uncovered(results, ds);
   const totalVolume = ds.keywords.reduce((s, k) => s + k.avgMonthly, 0);
+  const coveredVolume = totalVolume - unc.volume; // union — avoids pillar/subtopic double-counting
+  const nP = pillarsList().length;
+  const nSub = state.clusters.length - nP;
   const cards = [
     { label: 'Keywords', value: fmt(ds.keywords.length) },
     { label: 'Total monthly searches', value: fmt(totalVolume) },
-    { label: 'Categories', value: String(state.clusters.length) },
-    { label: 'Covered volume', value: fmt(totalCovered), sub: totalVolume ? Math.round((totalCovered / totalVolume) * 100) + '% of total' : '' },
+    { label: 'Categories', value: String(nP), sub: nSub ? `${nSub} subtopic${nSub === 1 ? '' : 's'}` : 'pillars' },
+    { label: 'Covered volume', value: fmt(coveredVolume), sub: totalVolume ? Math.round((coveredVolume / totalVolume) * 100) + '% of total' : '' },
     { label: 'Uncovered keywords', value: fmt(unc.count), sub: fmt(unc.volume) + ' searches' },
   ];
   $('#summaryCards').innerHTML = cards.map((c) =>
@@ -421,7 +517,8 @@ function renderSummaryCards(ds) {
 
 function renderBarChart() {
   const ctx = $('#barChart');
-  const sorted = [...results].sort((a, b) => b.totalVolume - a.totalVolume);
+  // Top-level pillars only — subtopics live inside them (avoids double-counting).
+  const sorted = pillarsList().map((c) => resultsById[c.id]).filter(Boolean).sort((a, b) => b.totalVolume - a.totalVolume);
   const data = {
     labels: sorted.map((r) => r.cluster.name),
     datasets: [{
@@ -453,7 +550,8 @@ function renderTrendChart() {
   canvas.hidden = false;
   note.hidden = true;
   const labels = ds.months.map(monthLabel);
-  const datasets = results.map((r, i) => ({
+  const pillarResults = pillarsList().map((c) => resultsById[c.id]).filter(Boolean);
+  const datasets = pillarResults.map((r, i) => ({
     label: r.cluster.name,
     data: r.monthlyTotals,
     borderColor: PALETTE[i % PALETTE.length],
@@ -480,23 +578,44 @@ function chartScales(time) {
   return { x: { grid, ticks }, y: { grid, ticks, beginAtZero: true } };
 }
 
+function ungroupedPillar(key) {
+  return key && key.startsWith('__ungrouped__:') ? (tree ? tree.pillars.find((p) => p.cluster.id === key.split(':')[1]) : null) : null;
+}
 function renderDetail(ds) {
-  // Build the selector (categories + uncovered).
+  // Build a hierarchical selector: pillar, its subtopics, its ungrouped, … then global uncovered.
   const sel = $('#detailSelect');
-  const opts = results.map((r) => `<option value="${r.cluster.id}">${escapeHtml(r.cluster.name)} (${fmt(r.count)})</option>`);
-  opts.push(`<option value="__uncovered__">Uncovered keywords</option>`);
-  sel.innerHTML = opts.join('');
-  if (!detailKey || (detailKey !== '__uncovered__' && !results.some((r) => r.cluster.id === detailKey))) {
-    detailKey = results[0]?.cluster.id || '__uncovered__';
+  const valid = new Set(['__uncovered__']);
+  let opts = '';
+  for (const p of pillarsList()) {
+    const pr = resultsById[p.id];
+    opts += `<option value="${p.id}">${escapeHtml(p.name)} (${fmt(pr ? pr.count : 0)})</option>`;
+    valid.add(p.id);
+    for (const k of childrenOf(p.id)) {
+      const kr = resultsById[k.id];
+      opts += `<option value="${k.id}">— ${escapeHtml(k.name)} (${fmt(kr ? kr.count : 0)})</option>`;
+      valid.add(k.id);
+    }
+    const pt = tree && tree.pillars.find((x) => x.cluster.id === p.id);
+    if (pt && pt.children.length) {
+      opts += `<option value="__ungrouped__:${p.id}">— Other (ungrouped) (${fmt(pt.ungrouped.count)})</option>`;
+      valid.add('__ungrouped__:' + p.id);
+    }
   }
+  opts += `<option value="__uncovered__">Uncovered keywords</option>`;
+  sel.innerHTML = opts;
+  if (!detailKey || !valid.has(detailKey)) detailKey = pillarsList()[0]?.id || '__uncovered__';
   sel.value = detailKey;
 
   let rows, title;
   if (detailKey === '__uncovered__') {
     const unc = uncovered(results, ds);
     rows = unc.rows; title = `Uncovered keywords — ${fmt(unc.volume)} searches`;
+  } else if (detailKey.startsWith('__ungrouped__:')) {
+    const pt = ungroupedPillar(detailKey);
+    rows = pt ? pt.ungrouped.matched : [];
+    title = pt ? `${pt.cluster.name} · Other (ungrouped) — ${fmt(pt.ungrouped.totalVolume)} searches` : 'Keywords';
   } else {
-    const r = results.find((x) => x.cluster.id === detailKey);
+    const r = resultsById[detailKey];
     rows = r ? r.matched : [];
     title = r ? `${r.cluster.name} — ${fmt(r.totalVolume)} searches` : 'Keywords';
   }
@@ -532,14 +651,19 @@ function changeClass(v) {
 function currentDetailRows() {
   const ds = activeDataset();
   if (detailKey === '__uncovered__') return uncovered(results, ds).rows;
-  const r = results.find((x) => x.cluster.id === detailKey);
+  if (detailKey && detailKey.startsWith('__ungrouped__:')) { const pt = ungroupedPillar(detailKey); return pt ? pt.ungrouped.matched : []; }
+  const r = resultsById[detailKey];
   return r ? r.matched : [];
 }
 function exportRows(format) {
   const rows = currentDetailRows();
   const aoa = [['Keyword', 'Avg. monthly searches', 'Intent', 'Three month change', 'YoY change', 'Competition']];
   rows.forEach((k) => aoa.push([k.keyword, k.avgMonthly, (INTENT_META[k.intent] || INTENT_META.other).label, k.threeMonth, k.yoy, k.competition]));
-  const name = (detailKey === '__uncovered__' ? 'uncovered' : (results.find((r) => r.cluster.id === detailKey)?.cluster.name || 'keywords')).replace(/[^\w-]+/g, '_');
+  let label = 'keywords';
+  if (detailKey === '__uncovered__') label = 'uncovered';
+  else if (detailKey && detailKey.startsWith('__ungrouped__:')) label = (ungroupedPillar(detailKey)?.cluster.name || 'pillar') + '_ungrouped';
+  else label = resultsById[detailKey]?.cluster.name || 'keywords';
+  const name = label.replace(/[^\w-]+/g, '_');
   if (format === 'xlsx') {
     const ws = XLSX.utils.aoa_to_sheet(aoa);
     const wb = XLSX.utils.book_new();

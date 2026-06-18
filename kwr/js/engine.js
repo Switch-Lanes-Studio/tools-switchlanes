@@ -50,9 +50,28 @@ function matchesCompiled(lower, compiled) {
   return compiled.includes.length > 0;
 }
 
+// Scoped sub-categories: a subtopic inherits its pillar's rules (AND), so a
+// keyword joins a subtopic only if it also matches the parent. The child only
+// has to specify its own differentiator.
+export function effectiveRules(cluster, byId) {
+  const includes = [...(cluster.includes || [])];
+  const excludes = [...(cluster.excludes || [])];
+  const parent = cluster.parentId && byId ? byId[cluster.parentId] : null;
+  if (parent) {
+    includes.unshift(...(parent.includes || []));
+    excludes.unshift(...(parent.excludes || []));
+  }
+  return { includes, excludes };
+}
+
+export function isPillar(cluster, clusters) {
+  return !cluster.parentId || !clusters.some((c) => c.id === cluster.parentId);
+}
+
 // Run one cluster against a dataset. Returns matched keywords + aggregates.
-export function runCluster(cluster, dataset) {
-  const compiled = compileCluster(cluster);
+// `byId` (id -> cluster) enables parent-rule inheritance for subtopics.
+export function runCluster(cluster, dataset, byId) {
+  const compiled = compileCluster(effectiveRules(cluster, byId));
   const months = dataset.months;
   const matched = [];
   const monthlyTotals = new Array(months.length).fill(0);
@@ -76,9 +95,35 @@ export function runCluster(cluster, dataset) {
   };
 }
 
-// Run a whole project (many clusters) against a dataset.
+// Run a whole project (many clusters) against a dataset, with parent inheritance.
 export function runProject(clusters, dataset) {
-  return clusters.map((c) => runCluster(c, dataset));
+  const byId = Object.fromEntries(clusters.map((c) => [c.id, c]));
+  return clusters.map((c) => runCluster(c, dataset, byId));
+}
+
+// Run a project as a 2-level tree. Returns the flat scoped results, a lookup by
+// cluster id, and per-pillar rollups including an "ungrouped" bucket (pillar
+// keywords that landed in none of its subtopics — a coverage-gap finder).
+export function runProjectTree(clusters, dataset) {
+  const byIdCluster = Object.fromEntries(clusters.map((c) => [c.id, c]));
+  const flat = clusters.map((c) => runCluster(c, dataset, byIdCluster));
+  const byId = {};
+  flat.forEach((r) => { byId[r.cluster.id] = r; });
+  const months = dataset.months.length;
+  const pillars = [];
+  for (const c of clusters) {
+    if (!isPillar(c, clusters)) continue;
+    const pres = byId[c.id];
+    const children = clusters.filter((x) => x.parentId === c.id && byIdCluster[x.parentId]).map((x) => byId[x.id]);
+    const claimed = new Set();
+    for (const ch of children) for (const k of ch.matched) claimed.add(k.lower);
+    const rows = pres.matched.filter((k) => !claimed.has(k.lower));
+    const monthlyTotals = new Array(months).fill(0);
+    let totalVolume = 0;
+    for (const k of rows) { totalVolume += k.avgMonthly; for (let i = 0; i < months; i++) monthlyTotals[i] += k.monthly[i] || 0; }
+    pillars.push({ cluster: c, result: pres, children, ungrouped: { matched: rows, count: rows.length, totalVolume, monthlyTotals } });
+  }
+  return { flat, byId, pillars };
 }
 
 // Diagnostics: which keywords fell into NO cluster (helps spot gaps/typos).
