@@ -13,6 +13,7 @@ let results = [];           // flat scoped cluster results for the active datase
 let resultsById = {};       // cluster id -> result
 let tree = null;            // { flat, byId, pillars } from runProjectTree
 const collapsedPillars = new Set();
+let draggingId = null;      // cluster id being dragged (re-parent)
 let charts = { bar: null, trend: null };
 let detailKey = null;       // cluster id, '__uncovered__', or '__ungrouped__:<pillarId>'
 
@@ -197,6 +198,15 @@ function renderClusters() {
     bar.querySelector('#clearSelBtn').onclick = () => { selectedClusters.clear(); renderClusters(); };
   }
 
+  // Top-level drop zone (shown only while dragging) — drop here to un-nest.
+  const tlz = document.createElement('div');
+  tlz.className = 'top-dropzone';
+  tlz.textContent = 'Drop here to make a top-level pillar';
+  tlz.addEventListener('dragover', (e) => { if (draggingId) { e.preventDefault(); tlz.classList.add('drop-target'); } });
+  tlz.addEventListener('dragleave', () => tlz.classList.remove('drop-target'));
+  tlz.addEventListener('drop', (e) => { e.preventDefault(); tlz.classList.remove('drop-target'); reparent(draggingId, null); });
+  host.appendChild(tlz);
+
   for (const p of pillarsList()) {
     host.appendChild(clusterItem(p, false));
     if (collapsedPillars.has(p.id)) continue;
@@ -249,7 +259,42 @@ function clusterItem(c, isSub) {
   el.querySelector('[data-edit]').onclick = () => openClusterDialog(c.id);
   el.querySelector('[data-view]').onclick = () => { detailKey = c.id; renderDashboard(); };
   el.querySelector('[data-delc]').onclick = () => deleteCluster(c.id);
+
+  // Drag to re-parent.
+  el.draggable = true;
+  el.addEventListener('dragstart', (e) => {
+    draggingId = c.id; el.classList.add('dragging');
+    document.body.classList.add('dragging-active');
+    e.dataTransfer.effectAllowed = 'move';
+    e.dataTransfer.setData('text/plain', c.id);
+  });
+  el.addEventListener('dragend', () => {
+    draggingId = null; el.classList.remove('dragging');
+    document.body.classList.remove('dragging-active');
+    document.querySelectorAll('.drop-target').forEach((x) => x.classList.remove('drop-target'));
+  });
+  if (!isSub) {
+    el.addEventListener('dragover', (e) => { if (draggingId && draggingId !== c.id) { e.preventDefault(); el.classList.add('drop-target'); } });
+    el.addEventListener('dragleave', () => el.classList.remove('drop-target'));
+    el.addEventListener('drop', (e) => { e.preventDefault(); el.classList.remove('drop-target'); reparent(draggingId, c.id); });
+  }
   return el;
+}
+
+function reparent(childId, newParentId) {
+  if (!childId) return;
+  const child = state.clusters.find((c) => c.id === childId);
+  if (!child) return;
+  const target = newParentId || null;
+  if (target === childId || target === (child.parentId || null)) return;
+  if (target) {
+    const tp = state.clusters.find((c) => c.id === target);
+    if (!tp || !isPillar(tp, state.clusters)) { toast('Subtopics can only be nested under a pillar.', true); return; }
+    if (state.clusters.some((c) => c.parentId === childId)) { toast(`“${child.name}” has subtopics, so it can't become a subtopic itself.`, true); return; }
+  }
+  child.parentId = target;
+  recompute();
+  toast(target ? `Moved “${child.name}” under “${state.clusters.find((c) => c.id === target).name}”` : `Moved “${child.name}” to top level`);
 }
 
 function ungroupedRow(p, ung) {
@@ -620,6 +665,7 @@ function renderDetail(ds) {
     title = r ? `${r.cluster.name} — ${fmt(r.totalVolume)} searches` : 'Keywords';
   }
   $('#detailTitle').textContent = title;
+  renderPillarBreakdown();
 
   const thead = $('#detailTable thead');
   const tbody = $('#detailTable tbody');
@@ -640,6 +686,73 @@ function renderDetail(ds) {
     tbody.innerHTML += `<tr><td colspan="6" style="color:var(--muted)">Showing first 1000 of ${fmt(rows.length)}. Export for the full list.</td></tr>`;
   }
 }
+// Which pillar is "in focus" for the breakdown bar (pillar, its subtopic, or its ungrouped).
+function focusedPillarId() {
+  if (!detailKey || detailKey === '__uncovered__') return null;
+  if (detailKey.startsWith('__ungrouped__:')) return detailKey.split(':')[1];
+  const c = state.clusters.find((x) => x.id === detailKey);
+  if (!c) return null;
+  return c.parentId || c.id;
+}
+function renderPillarBreakdown() {
+  const host = $('#pillarBreakdown');
+  const pid = focusedPillarId();
+  const pt = pid && tree ? tree.pillars.find((x) => x.cluster.id === pid) : null;
+  if (!pt || !pt.children.length) { host.hidden = true; host.innerHTML = ''; return; }
+  const segs = pt.children.map((cr, i) => ({ key: cr.cluster.id, name: cr.cluster.name, vol: cr.totalVolume, color: PALETTE[i % PALETTE.length] }));
+  segs.push({ key: '__ungrouped__:' + pid, name: 'Other (ungrouped)', vol: pt.ungrouped.totalVolume, color: '#5f6470' });
+  const total = segs.reduce((s, x) => s + x.vol, 0) || 1;
+  const bar = segs.filter((s) => s.vol > 0)
+    .map((s) => `<div class="pb-seg" data-key="${s.key}" title="${escapeHtml(s.name)}: ${fmt(s.vol)}" style="width:${(s.vol / total * 100).toFixed(2)}%;background:${s.color}"></div>`).join('');
+  const legend = segs.map((s) => `<span class="pb-leg" data-key="${s.key}"><span class="dot" style="background:${s.color}"></span>${escapeHtml(s.name)} ${fmt(s.vol)}</span>`).join('');
+  host.hidden = false;
+  host.innerHTML = `<div class="pb-title">${escapeHtml(pt.cluster.name)} · subtopic breakdown</div><div class="pb-bar">${bar}</div><div class="pb-legend">${legend}</div>`;
+  host.querySelectorAll('[data-key]').forEach((elx) => { elx.onclick = () => { detailKey = elx.dataset.key; renderDashboard(); }; });
+}
+
+// Multi-sheet workbook: an Overview sheet + one sheet per pillar (keywords with
+// a Subtopic column) — regenerates the original spreadsheet's tab structure.
+function sheetName(name, used) {
+  let base = (name || 'Sheet').replace(/[\\/?*[\]:]/g, ' ').trim().slice(0, 28) || 'Sheet';
+  let n = base, i = 2;
+  while (used.has(n)) { n = base.slice(0, 26) + ' ' + i; i++; }
+  used.add(n); return n;
+}
+function exportWorkbook() {
+  const ds = activeDataset();
+  if (!ds) { toast('Upload a dataset first.', true); return; }
+  const wb = XLSX.utils.book_new();
+  const used = new Set();
+  const ov = [['Pillar', 'Subtopic', 'Avg. monthly volume', 'Keyword count']];
+  for (const p of pillarsList()) {
+    const pr = resultsById[p.id];
+    ov.push([p.name, '(pillar total)', pr ? pr.totalVolume : 0, pr ? pr.count : 0]);
+    for (const k of childrenOf(p.id)) { const kr = resultsById[k.id]; ov.push([p.name, k.name, kr ? kr.totalVolume : 0, kr ? kr.count : 0]); }
+    const pt = tree.pillars.find((x) => x.cluster.id === p.id);
+    if (pt && pt.children.length) ov.push([p.name, '(ungrouped)', pt.ungrouped.totalVolume, pt.ungrouped.count]);
+  }
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(ov), sheetName('Overview', used));
+  for (const p of pillarsList()) {
+    const pr = resultsById[p.id];
+    if (!pr) continue;
+    const subMap = new Map();
+    for (const k of childrenOf(p.id)) {
+      const kr = resultsById[k.id];
+      if (!kr) continue;
+      for (const kw of kr.matched) { const a = subMap.get(kw.lower) || []; a.push(kr.cluster.name); subMap.set(kw.lower, a); }
+    }
+    const aoa = [['Keyword', 'Subtopic', 'Avg. monthly searches', 'Intent', 'Three month change', 'YoY change', 'Competition']];
+    for (const k of pr.matched) {
+      const subs = subMap.get(k.lower);
+      aoa.push([k.keyword, subs ? subs.join(' · ') : '(ungrouped)', k.avgMonthly, (INTENT_META[k.intent] || INTENT_META.other).label, k.threeMonth, k.yoy, k.competition]);
+    }
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(aoa), sheetName(p.name, used));
+  }
+  const fname = (state.name || ds.label || 'keywords').replace(/[^\w-]+/g, '_');
+  XLSX.writeFile(wb, `${fname}_clusters.xlsx`);
+  toast(`Exported ${pillarsList().length + 1} sheets`);
+}
+
 function changeClass(v) {
   if (!v) return '';
   if (v.startsWith('-')) return 'neg';
@@ -780,6 +893,7 @@ function init() {
   $('#detailSelect').onchange = (e) => { detailKey = e.target.value; renderDetail(activeDataset()); };
   $('#exportCsvBtn').onclick = () => exportRows('csv');
   $('#exportXlsxBtn').onclick = () => exportRows('xlsx');
+  $('#exportAllBtn').onclick = exportWorkbook;
 
   // Cluster dialog
   document.querySelectorAll('[data-add]').forEach((btn) => {

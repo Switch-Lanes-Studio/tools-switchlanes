@@ -120,6 +120,24 @@ body {
 .card-actions { display: flex; gap: 8px; align-items: center; }
 .card-actions select { background: var(--panel-2); border: 1px solid var(--line); color: var(--text); padding: 6px 8px; border-radius: 7px; }
 
+/* Pillar breakdown */
+.pillar-breakdown { margin-bottom: 12px; }
+.pb-title { color: var(--muted); font-size: 12px; margin-bottom: 6px; }
+.pb-bar { display: flex; width: 100%; height: 26px; border-radius: 6px; overflow: hidden; background: var(--panel-2); }
+.pb-seg { height: 26px; cursor: pointer; transition: filter .1s; min-width: 2px; }
+.pb-seg:hover { filter: brightness(1.15); }
+.pb-legend { display: flex; flex-wrap: wrap; gap: 8px 14px; margin-top: 8px; }
+.pb-leg { font-size: 12px; color: var(--muted); cursor: pointer; }
+.pb-leg:hover { color: var(--text); }
+.pb-leg .dot { display: inline-block; width: 9px; height: 9px; border-radius: 50%; margin-right: 4px; }
+
+/* Drag to re-parent */
+.cluster-item.dragging { opacity: .45; }
+.cluster-item.drop-target { border-color: var(--accent-2); box-shadow: 0 0 0 1px var(--accent-2) inset; }
+.top-dropzone { display: none; border: 1px dashed var(--line); border-radius: 8px; padding: 8px; text-align: center; color: var(--muted); font-size: 12px; }
+body.dragging-active .top-dropzone { display: block; }
+.top-dropzone.drop-target { border-color: var(--accent-2); color: var(--text); }
+
 /* Intent legend */
 .intent-legend { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-bottom: 10px; }
 .intent-legend .legend-label { color: var(--muted); font-size: 12px; }
