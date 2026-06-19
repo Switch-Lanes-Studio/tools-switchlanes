@@ -28,15 +28,22 @@ function makeDataset(label, role, rows) {
     label,
     role,
     months: mlist,
-    keywords: rows.map(([kw, avg, three, yoy], i) => ({
-      keyword: kw,
-      lower: kw.toLowerCase(),
-      avgMonthly: avg,
-      threeMonth: three || '0%',
-      yoy: yoy || '0%',
-      competition: ['Low', 'Medium', 'High'][i % 3],
-      monthly: series(avg, mlist, (i + 1) * 137 + avg),
-    })),
+    keywords: rows.map(([kw, avg, three, yoy], i) => {
+      const ci = (i * 37 + avg) % 100;            // pseudo competition index 0–99
+      const bidLow = +(0.2 + (ci / 100) * 1.5).toFixed(2);
+      const bidHigh = +(bidLow + 0.5 + (ci / 100) * 2).toFixed(2);
+      return {
+        keyword: kw,
+        lower: kw.toLowerCase(),
+        avgMonthly: avg,
+        threeMonth: three || '0%',
+        yoy: yoy || '0%',
+        competition: ['Low', 'Medium', 'High'][i % 3],
+        competitionIndex: ci,
+        bidLow, bidHigh, cpc: +((bidLow + bidHigh) / 2).toFixed(2),
+        monthly: series(avg, mlist, (i + 1) * 137 + avg),
+      };
+    }),
   };
 }
 

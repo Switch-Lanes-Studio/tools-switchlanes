@@ -3,7 +3,7 @@ import { parseGkp, monthLabel, MONTH_LABELS } from './parser.js';
 import { runProjectTree, isPillar, uncovered, seasonality } from './engine.js';
 import { sampleDatasets, sampleClusters } from './sample.js';
 import { suggestCategories } from './suggest.js';
-import { annotateIntents, INTENT_META } from './intent.js';
+import { annotateIntents, INTENT_META, INTENT_ACTION } from './intent.js';
 
 const AUTOSAVE_KEY = 'kct.autosave.v1';
 const PALETTE = ['#4f8cff', '#36c08e', '#ffb454', '#ff5c6c', '#b072ff', '#26c6da', '#f06292', '#9ccc65', '#ffca28', '#8d6e63'];
@@ -16,6 +16,7 @@ const collapsedPillars = new Set();
 let draggingId = null;      // cluster id being dragged (re-parent)
 let charts = { bar: null, trend: null };
 let detailKey = null;       // cluster id, '__uncovered__', or '__ungrouped__:<pillarId>'
+let detailSort = { key: 'avgMonthly', dir: -1 }; // table column sort
 
 function blankState() {
   return { name: '', datasets: [], activeDatasetId: null, clusters: [] };
@@ -36,8 +37,24 @@ function annotateAll() {
   annotateIntents(state.datasets);
   for (const d of state.datasets) {
     d.hasMonthly = d.months.length > 0 && d.keywords.some((k) => k.monthly.some((v) => v > 0));
+    d.hasCpc = d.keywords.some((k) => k.cpc != null);
+    d.hasCompetition = d.keywords.some((k) => k.competitionIndex != null);
+    for (const k of d.keywords) {
+      const w = (INTENT_ACTION[k.intent] || INTENT_ACTION.other).seoW;
+      const comp = k.competitionIndex != null ? k.competitionIndex : 0;
+      // Opportunity: demand, weighted by content-fit intent, penalised by competition.
+      k.opportunity = Math.round(k.avgMonthly * w * (1 - 0.6 * comp / 100));
+    }
   }
 }
+// Difficulty band from GKP's 0–100 competition index.
+function difficultyBand(idx) {
+  if (idx == null) return null;
+  if (idx >= 67) return { label: 'High', cls: 'neg' };
+  if (idx >= 34) return { label: 'Med', cls: '' };
+  return { label: 'Low', cls: 'pos' };
+}
+function fmtCpc(v) { return v == null ? '—' : '€' + v.toFixed(2); }
 function intentChip(intent) {
   const m = INTENT_META[intent] || INTENT_META.other;
   return `<span class="chip" style="--c:${m.color}">${m.label}</span>`;
@@ -235,6 +252,7 @@ function clusterItem(c, isSub) {
       <span class="stat">${r ? fmt(r.totalVolume) : '–'}</span>
     </div>
     <div class="rulesummary">${ruleSummary(c)}</div>
+    ${clusterInsight(r)}
     <div class="row1" style="margin-top:6px">
       <span class="meta" style="color:var(--muted);font-size:11px">${r ? fmt(r.count) + ' keywords' : ''}</span>
       <span class="actions">
@@ -297,6 +315,21 @@ function reparent(childId, newParentId) {
   toast(target ? `Moved “${child.name}” under “${state.clusters.find((c) => c.id === target).name}”` : `Moved “${child.name}” to top level`);
 }
 
+function dominantIntent(r) {
+  const t = {};
+  for (const k of r.matched) t[k.intent] = (t[k.intent] || 0) + k.avgMonthly;
+  let best = 'other', m = -1;
+  for (const k in t) if (t[k] > m) { m = t[k]; best = k; }
+  return best;
+}
+function clusterInsight(r) {
+  if (!r || !r.count) return '';
+  const bits = [`opp ${fmt(r.totalOpportunity)}`];
+  if (r.avgCpc != null) bits.push(`CPC ${fmtCpc(r.avgCpc)}`);
+  if (r.avgCompetition != null) bits.push(`diff. ${difficultyBand(r.avgCompetition).label}`);
+  const act = INTENT_ACTION[dominantIntent(r)] || INTENT_ACTION.other;
+  return `<div class="cl-insight">${bits.join(' · ')} · <span class="cl-rec" title="SEO: ${escapeHtml(act.seo)}">→ ${escapeHtml(act.ads)}</span></div>`;
+}
 function ungroupedRow(p, ung) {
   const el = document.createElement('div');
   el.className = 'cluster-item sub ungrouped';
@@ -667,24 +700,61 @@ function renderDetail(ds) {
   $('#detailTitle').textContent = title;
   renderPillarBreakdown();
 
+  rows = sortRows(rows);
   const thead = $('#detailTable thead');
   const tbody = $('#detailTable tbody');
+  const arrow = (key) => detailSort.key === key ? (detailSort.dir < 0 ? ' ▾' : ' ▴') : '';
+  const th = (key, label, cls) => `<th class="${cls || ''} sortable" data-sort="${key}" title="Sort">${label}${arrow(key)}</th>`;
   thead.innerHTML = `<tr>
-    <th>Keyword</th><th class="num">Avg. monthly</th><th>Intent</th>
-    <th class="num">3-mo change</th><th class="num">YoY change</th><th>Competition</th>
+    ${th('keyword', 'Keyword')}
+    ${th('avgMonthly', 'Avg. monthly', 'num')}
+    ${th('opportunity', 'Opportunity', 'num')}
+    <th>Intent</th>
+    ${th('cpc', 'CPC', 'num')}
+    ${th('competitionIndex', 'Difficulty', 'num')}
+    ${th('threeMonth', '3-mo', 'num')}
+    ${th('yoy', 'YoY', 'num')}
   </tr>`;
-  tbody.innerHTML = rows.slice(0, 1000).map((k) => `<tr>
-    <td>${escapeHtml(k.keyword)}</td>
-    <td class="num">${fmt(k.avgMonthly)}</td>
-    <td>${intentChip(k.intent)}</td>
-    <td class="num ${changeClass(k.threeMonth)}">${escapeHtml(k.threeMonth)}</td>
-    <td class="num ${changeClass(k.yoy)}">${escapeHtml(k.yoy)}</td>
-    <td>${escapeHtml(k.competition)}</td>
-  </tr>`).join('') || `<tr><td colspan="6" style="color:var(--muted)">No keywords.</td></tr>`;
-
+  tbody.innerHTML = rows.slice(0, 1000).map((k) => {
+    const d = difficultyBand(k.competitionIndex);
+    return `<tr>
+      <td>${escapeHtml(k.keyword)}</td>
+      <td class="num">${fmt(k.avgMonthly)}</td>
+      <td class="num" style="color:var(--accent-2)">${fmt(k.opportunity)}</td>
+      <td>${intentChip(k.intent)}</td>
+      <td class="num">${fmtCpc(k.cpc)}</td>
+      <td class="num">${d ? `<span class="${d.cls}">${d.label}</span> <span style="color:var(--muted)">${k.competitionIndex}</span>` : '—'}</td>
+      <td class="num ${changeClass(k.threeMonth)}">${escapeHtml(k.threeMonth)}</td>
+      <td class="num ${changeClass(k.yoy)}">${escapeHtml(k.yoy)}</td>
+    </tr>`;
+  }).join('') || `<tr><td colspan="8" style="color:var(--muted)">No keywords.</td></tr>`;
   if (rows.length > 1000) {
-    tbody.innerHTML += `<tr><td colspan="6" style="color:var(--muted)">Showing first 1000 of ${fmt(rows.length)}. Export for the full list.</td></tr>`;
+    tbody.innerHTML += `<tr><td colspan="8" style="color:var(--muted)">Showing first 1000 of ${fmt(rows.length)}. Export for the full list.</td></tr>`;
   }
+  thead.querySelectorAll('[data-sort]').forEach((el) => {
+    el.onclick = () => {
+      const key = el.dataset.sort;
+      if (detailSort.key === key) detailSort.dir *= -1;
+      else detailSort = { key, dir: key === 'keyword' ? 1 : -1 };
+      renderDetail(activeDataset());
+    };
+  });
+}
+function sortRows(rows) {
+  const { key, dir } = detailSort;
+  const pct = (v) => { const n = parseFloat(String(v).replace('%', '')); return Number.isFinite(n) ? n : -Infinity; };
+  const val = (k) => {
+    if (key === 'keyword') return k.keyword.toLowerCase();
+    if (key === 'threeMonth') return pct(k.threeMonth);
+    if (key === 'yoy') return pct(k.yoy);
+    const v = k[key];
+    return v == null ? -Infinity : v;
+  };
+  return [...rows].sort((a, b) => {
+    const x = val(a), y = val(b);
+    if (typeof x === 'string') return x.localeCompare(y) * dir;
+    return (x - y) * dir;
+  });
 }
 // Which pillar is "in focus" for the breakdown bar (pillar, its subtopic, or its ungrouped).
 function focusedPillarId() {
@@ -741,10 +811,10 @@ function exportWorkbook() {
       if (!kr) continue;
       for (const kw of kr.matched) { const a = subMap.get(kw.lower) || []; a.push(kr.cluster.name); subMap.set(kw.lower, a); }
     }
-    const aoa = [['Keyword', 'Subtopic', 'Avg. monthly searches', 'Intent', 'Three month change', 'YoY change', 'Competition']];
+    const aoa = [['Keyword', 'Subtopic', 'Avg. monthly searches', 'Opportunity', 'Intent', 'CPC (avg)', 'Competition index', 'Three month change', 'YoY change']];
     for (const k of pr.matched) {
       const subs = subMap.get(k.lower);
-      aoa.push([k.keyword, subs ? subs.join(' · ') : '(ungrouped)', k.avgMonthly, (INTENT_META[k.intent] || INTENT_META.other).label, k.threeMonth, k.yoy, k.competition]);
+      aoa.push([k.keyword, subs ? subs.join(' · ') : '(ungrouped)', k.avgMonthly, k.opportunity, (INTENT_META[k.intent] || INTENT_META.other).label, k.cpc != null ? +k.cpc.toFixed(2) : '', k.competitionIndex ?? '', k.threeMonth, k.yoy]);
     }
     XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(aoa), sheetName(p.name, used));
   }
@@ -770,8 +840,8 @@ function currentDetailRows() {
 }
 function exportRows(format) {
   const rows = currentDetailRows();
-  const aoa = [['Keyword', 'Avg. monthly searches', 'Intent', 'Three month change', 'YoY change', 'Competition']];
-  rows.forEach((k) => aoa.push([k.keyword, k.avgMonthly, (INTENT_META[k.intent] || INTENT_META.other).label, k.threeMonth, k.yoy, k.competition]));
+  const aoa = [['Keyword', 'Avg. monthly searches', 'Opportunity', 'Intent', 'CPC (avg)', 'Competition index', 'Three month change', 'YoY change']];
+  rows.forEach((k) => aoa.push([k.keyword, k.avgMonthly, k.opportunity, (INTENT_META[k.intent] || INTENT_META.other).label, k.cpc != null ? +k.cpc.toFixed(2) : '', k.competitionIndex ?? '', k.threeMonth, k.yoy]));
   let label = 'keywords';
   if (detailKey === '__uncovered__') label = 'uncovered';
   else if (detailKey && detailKey.startsWith('__ungrouped__:')) label = (ungroupedPillar(detailKey)?.cluster.name || 'pillar') + '_ungrouped';

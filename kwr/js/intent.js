@@ -57,6 +57,17 @@ export const INTENT_META = {
   other: { label: 'Other', color: '#9aa3b2' },
 };
 
+// How each intent maps to action + weighting. seoW = value for organic content,
+// adsW = value for paid search. Used by the opportunity score and the
+// per-cluster "recommended use" hint.
+export const INTENT_ACTION = {
+  transactional: { seoW: 0.7, adsW: 1.0, seo: 'Landing / product page', ads: 'Core ad-group — bid here' },
+  commercial: { seoW: 0.9, adsW: 0.9, seo: 'Comparison / “best” page', ads: 'Strong ad-group' },
+  informational: { seoW: 1.0, adsW: 0.3, seo: 'Guide / blog / FAQ', ads: 'Usually skip in paid' },
+  navigational: { seoW: 0.3, adsW: 0.6, seo: 'Brand page', ads: 'Brand-defense ad-group' },
+  other: { seoW: 0.6, adsW: 0.5, seo: 'Review intent', ads: 'Review before bidding' },
+};
+
 export function isQuestion(lower) {
   return tokenize(lower).some((t) => Q_WORDS.has(t));
 }

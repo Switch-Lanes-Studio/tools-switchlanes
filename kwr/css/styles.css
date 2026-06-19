@@ -83,6 +83,10 @@ body {
 .cluster-item .rulesummary { color: var(--muted); font-size: 11px; margin-top: 4px; word-break: break-word; }
 .cluster-item .actions { display: flex; gap: 4px; }
 .cluster-item.err { border-color: var(--danger); }
+.cl-insight { color: var(--muted); font-size: 11px; margin-top: 4px; }
+.cl-insight .cl-rec { color: var(--accent); }
+.kw-table th.sortable { cursor: pointer; user-select: none; }
+.kw-table th.sortable:hover { color: var(--accent); }
 .cluster-item.sel { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 10%, var(--panel-2)); }
 .cluster-item .cl-check { display: flex; align-items: center; cursor: pointer; }
 .cluster-item .cl-check input { cursor: pointer; }

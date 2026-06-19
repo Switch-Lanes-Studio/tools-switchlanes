@@ -13,11 +13,14 @@ const MONTHS = {
 
 // Native GKP metric columns we carry straight through (not recomputed).
 const KNOWN_FIELDS = {
-  keyword: ['keyword'],
+  keyword: ['keyword', 'zoekwoord'],
   avgMonthly: ['avg. monthly searches', 'avg monthly searches', 'gem. maandelijkse zoekopdrachten'],
-  threeMonth: ['three month change', 'three-month change'],
-  yoy: ['yoy change', 'year over year change'],
-  competition: ['competition'],
+  threeMonth: ['three month change', 'three-month change', 'wijziging over drie maanden'],
+  yoy: ['yoy change', 'year over year change', 'wijziging op jaarbasis'],
+  competition: ['competition', 'concurrentie'],
+  competitionIndex: ['competition (indexed value)', 'competition indexed value', 'concurrentie (geïndexeerde waarde)'],
+  bidLow: ['top of page bid (low range)', 'top of page bid low range', 'bovenkant van pagina-bod (laag bereik)', 'bovenkant van pagina bod (laag bereik)'],
+  bidHigh: ['top of page bid (high range)', 'top of page bid high range', 'bovenkant van pagina-bod (hoog bereik)', 'bovenkant van pagina bod (hoog bereik)'],
 };
 
 // Decode an uploaded file's bytes into a string, honouring a UTF-16 BOM.
@@ -85,6 +88,22 @@ function toNumber(raw) {
   return Number.isFinite(n) ? n : 0;
 }
 
+// Locale-aware money parser for bid columns (e.g. "0,01" EU vs "1.52" US).
+// Returns null when there's no bid value.
+function toMoney(raw) {
+  if (raw === null || raw === undefined) return null;
+  let s = String(raw).replace(/["\s]/g, '').replace(/[^0-9.,]/g, '');
+  if (!s) return null;
+  if (s.includes(',') && s.includes('.')) {
+    // The right-most separator is the decimal one.
+    s = s.lastIndexOf(',') > s.lastIndexOf('.') ? s.replace(/\./g, '').replace(',', '.') : s.replace(/,/g, '');
+  } else if (s.includes(',')) {
+    s = s.replace(',', '.');
+  }
+  const n = parseFloat(s);
+  return Number.isFinite(n) ? n : null;
+}
+
 // Public API: parse raw bytes (ArrayBuffer) into a structured dataset.
 export function parseGkp(arrayBuffer, fileName) {
   const text = decodeBytes(arrayBuffer);
@@ -122,6 +141,8 @@ export function parseGkp(arrayBuffer, fileName) {
     const kw = String(row[fieldCols.keyword] || '').trim();
     if (!kw) continue;
     const monthly = monthCols.map((mc) => toNumber(row[mc.col]));
+    const bidLow = fieldCols.bidLow !== undefined ? toMoney(row[fieldCols.bidLow]) : null;
+    const bidHigh = fieldCols.bidHigh !== undefined ? toMoney(row[fieldCols.bidHigh]) : null;
     keywords.push({
       keyword: kw,
       lower: kw.toLowerCase(),
@@ -129,6 +150,9 @@ export function parseGkp(arrayBuffer, fileName) {
       threeMonth: fieldCols.threeMonth !== undefined ? String(row[fieldCols.threeMonth] || '').trim() : '',
       yoy: fieldCols.yoy !== undefined ? String(row[fieldCols.yoy] || '').trim() : '',
       competition: fieldCols.competition !== undefined ? String(row[fieldCols.competition] || '').trim() : '',
+      competitionIndex: fieldCols.competitionIndex !== undefined ? toNumber(row[fieldCols.competitionIndex]) : null,
+      bidLow, bidHigh,
+      cpc: (bidLow != null && bidHigh != null) ? (bidLow + bidHigh) / 2 : (bidHigh ?? bidLow), // midpoint
       monthly,
     });
   }
