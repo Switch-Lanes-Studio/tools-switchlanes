@@ -75,7 +75,7 @@ export function runCluster(cluster, dataset, byId) {
   const months = dataset.months;
   const matched = [];
   const monthlyTotals = new Array(months.length).fill(0);
-  let totalVolume = 0, totalOpportunity = 0;
+  let totalVolume = 0, totalOpportunity = 0, totalClicks = 0, totalAdSpend = 0;
   let sumComp = 0, nComp = 0, sumCpc = 0, nCpc = 0;
 
   for (const kw of dataset.keywords) {
@@ -83,6 +83,8 @@ export function runCluster(cluster, dataset, byId) {
     matched.push(kw);
     totalVolume += kw.avgMonthly;
     totalOpportunity += kw.opportunity || 0;
+    totalClicks += kw.clickPotential || 0;
+    totalAdSpend += kw.adSpendEst || 0;
     if (kw.competitionIndex != null) { sumComp += kw.competitionIndex; nComp++; }
     if (kw.cpc != null) { sumCpc += kw.cpc; nCpc++; }
     for (let i = 0; i < months.length; i++) monthlyTotals[i] += kw.monthly[i] || 0;
@@ -96,6 +98,8 @@ export function runCluster(cluster, dataset, byId) {
     count: matched.length,
     totalVolume,
     totalOpportunity,
+    totalClicks,
+    totalAdSpend,
     avgCompetition: nComp ? Math.round(sumComp / nComp) : null,
     avgCpc: nCpc ? sumCpc / nCpc : null,
     monthlyTotals,

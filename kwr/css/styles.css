@@ -131,6 +131,10 @@ body {
 .dup-head .meta, .dup-vars .meta { color: var(--muted); font-size: 11px; }
 .dup-vars { color: var(--text); font-size: 12px; line-height: 1.7; }
 .brief { white-space: pre-wrap; font: 12px/1.55 ui-monospace, Menlo, monospace; color: var(--text); background: var(--panel-2); border: 1px solid var(--line); border-radius: 8px; padding: 12px; margin: 0; }
+.mod-cols { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+.mod-table { font-size: 12px; }
+.mod-table th, .mod-table td { padding: 4px 8px; }
+@media (max-width: 620px) { .mod-cols { grid-template-columns: 1fr; } }
 
 /* Pillar breakdown */
 .pillar-breakdown { margin-bottom: 12px; }

@@ -32,9 +32,12 @@ function activeDataset() {
 }
 // (Re)tag every keyword with its search intent + flag whether the dataset has
 // real month-by-month data. Call when datasets/roles change.
+const CTR_TOP = 0.28;  // est. organic CTR at position #1
+const PAID_CTR = 0.05; // est. paid-search CTR (blended)
 function annotateAll() {
   if (!state.datasets.length) return;
   annotateIntents(state.datasets);
+  const brand = buildBrandSplit(state.datasets);
   for (const d of state.datasets) {
     d.hasMonthly = d.months.length > 0 && d.keywords.some((k) => k.monthly.some((v) => v > 0));
     d.hasCpc = d.keywords.some((k) => k.cpc != null);
@@ -44,8 +47,33 @@ function annotateAll() {
       const comp = k.competitionIndex != null ? k.competitionIndex : 0;
       // Opportunity: demand, weighted by content-fit intent, penalised by competition.
       k.opportunity = Math.round(k.avgMonthly * w * (1 - 0.6 * comp / 100));
+      // Click potential (#1 organic) and an estimated monthly paid spend.
+      k.clickPotential = Math.round(k.avgMonthly * CTR_TOP);
+      k.adSpendEst = k.cpc != null ? k.avgMonthly * PAID_CTR * k.cpc : 0;
+      // Branded vs generic.
+      const toks = new Set(k.lower.split(/[^\p{L}\p{N}]+/u).filter(Boolean));
+      k.branded = [...toks].some((t) => brand.own.has(t)) ? 'own'
+        : [...toks].some((t) => brand.comp.has(t)) ? 'competitor' : 'generic';
     }
   }
+}
+// Distinctive brand tokens, split by your-brand vs competitor (from dataset roles).
+function buildBrandSplit(datasets) {
+  const tok = (s) => s.toLowerCase().split(/[^\p{L}\p{N}]+/u).filter((t) => t.length > 2 && !/^\d+$/.test(t));
+  const marketHead = new Set();
+  for (const d of datasets.filter((x) => x.role === 'market')) {
+    const c = new Map();
+    for (const k of d.keywords) for (const t of new Set(tok(k.lower))) c.set(t, (c.get(t) || 0) + 1);
+    for (const [t, n] of c) if (n > d.keywords.length * 0.3) marketHead.add(t);
+  }
+  const collect = (role) => {
+    const c = new Map();
+    for (const d of datasets.filter((x) => x.role === role)) for (const k of d.keywords) for (const t of new Set(tok(k.lower))) c.set(t, (c.get(t) || 0) + 1);
+    const out = new Set();
+    for (const [t, n] of c) if (n >= 2 && !marketHead.has(t)) out.add(t);
+    return out;
+  };
+  return { own: collect('brand'), comp: collect('competitor') };
 }
 // Difficulty band from GKP's 0–100 competition index.
 function difficultyBand(idx) {
@@ -326,8 +354,9 @@ function dominantIntent(r) {
 }
 function clusterInsight(r) {
   if (!r || !r.count) return '';
-  const bits = [`opp ${fmt(r.totalOpportunity)}`];
+  const bits = [`opp ${fmt(r.totalOpportunity)}`, `~${fmt(r.totalClicks)} clicks/mo`];
   if (r.avgCpc != null) bits.push(`CPC ${fmtCpc(r.avgCpc)}`);
+  if (r.totalAdSpend > 0) bits.push(`~€${fmt(Math.round(r.totalAdSpend))}/mo ads`);
   if (r.avgCompetition != null) bits.push(`diff. ${difficultyBand(r.avgCompetition).label}`);
   const act = INTENT_ACTION[dominantIntent(r)] || INTENT_ACTION.other;
   return `<div class="cl-insight">${bits.join(' · ')} · <span class="cl-rec" title="SEO: ${escapeHtml(act.seo)}">→ ${escapeHtml(act.ads)}</span></div>`;
@@ -583,13 +612,19 @@ function renderSummaryCards(ds) {
   const coveredVolume = totalVolume - unc.volume; // union — avoids pillar/subtopic double-counting
   const nP = pillarsList().length;
   const nSub = state.clusters.length - nP;
+  const totalClicks = ds.keywords.reduce((s, k) => s + (k.clickPotential || 0), 0);
+  // Branded share (if a brand/competitor dataset is tagged).
+  let brandedVol = 0;
+  for (const k of ds.keywords) if (k.branded && k.branded !== 'generic') brandedVol += k.avgMonthly;
   const cards = [
     { label: 'Keywords', value: fmt(ds.keywords.length) },
     { label: 'Total monthly searches', value: fmt(totalVolume) },
+    { label: 'Est. clicks (#1)', value: fmt(totalClicks), sub: 'if you rank top organic' },
     { label: 'Categories', value: String(nP), sub: nSub ? `${nSub} subtopic${nSub === 1 ? '' : 's'}` : 'pillars' },
     { label: 'Covered volume', value: fmt(coveredVolume), sub: totalVolume ? Math.round((coveredVolume / totalVolume) * 100) + '% of total' : '' },
     { label: 'Uncovered keywords', value: fmt(unc.count), sub: fmt(unc.volume) + ' searches' },
   ];
+  if (brandedVol > 0) cards.push({ label: 'Branded demand', value: Math.round(brandedVol / totalVolume * 100) + '%', sub: fmt(brandedVol) + ' searches' });
   $('#summaryCards').innerHTML = cards.map((c) =>
     `<div class="scard"><div class="label">${c.label}</div><div class="value">${c.value}</div>${c.sub ? `<div class="sub">${c.sub}</div>` : ''}</div>`
   ).join('');
@@ -710,6 +745,7 @@ function renderDetail(ds) {
   thead.innerHTML = `<tr>
     ${th('keyword', 'Keyword')}
     ${th('avgMonthly', 'Avg. monthly', 'num')}
+    ${th('clickPotential', 'Clicks #1', 'num')}
     ${th('opportunity', 'Opportunity', 'num')}
     <th>Intent</th>
     ${th('cpc', 'CPC', 'num')}
@@ -722,6 +758,7 @@ function renderDetail(ds) {
     return `<tr>
       <td>${escapeHtml(k.keyword)}</td>
       <td class="num">${fmt(k.avgMonthly)}</td>
+      <td class="num" style="color:var(--muted)">${fmt(k.clickPotential)}</td>
       <td class="num" style="color:var(--accent-2)">${fmt(k.opportunity)}</td>
       <td>${intentChip(k.intent)}</td>
       <td class="num">${fmtCpc(k.cpc)}</td>
@@ -729,9 +766,9 @@ function renderDetail(ds) {
       <td class="num ${changeClass(k.threeMonth)}">${escapeHtml(k.threeMonth)}</td>
       <td class="num ${changeClass(k.yoy)}">${escapeHtml(k.yoy)}</td>
     </tr>`;
-  }).join('') || `<tr><td colspan="8" style="color:var(--muted)">No keywords.</td></tr>`;
+  }).join('') || `<tr><td colspan="9" style="color:var(--muted)">No keywords.</td></tr>`;
   if (rows.length > 1000) {
-    tbody.innerHTML += `<tr><td colspan="8" style="color:var(--muted)">Showing first 1000 of ${fmt(rows.length)}. Export for the full list.</td></tr>`;
+    tbody.innerHTML += `<tr><td colspan="9" style="color:var(--muted)">Showing first 1000 of ${fmt(rows.length)}. Export for the full list.</td></tr>`;
   }
   thead.querySelectorAll('[data-sort]').forEach((el) => {
     el.onclick = () => {
@@ -922,6 +959,33 @@ function openDuplicates() {
   openReport('Near-duplicate keywords', `${groups.length} groups · ${fmt(dupKw)} keywords that likely belong on one page each. Consolidate around the bold term.`, body, copy);
 }
 
+// ---------- Modifier explorer (discovery) ----------
+const MOD_STOP = new Set(['de', 'het', 'een', 'en', 'of', 'voor', 'met', 'naar', 'in', 'op', 'van', 'te', 'the', 'a', 'an', 'and', 'or', 'for', 'with', 'to', 'of', 'le', 'la', 'les', 'des', 'du', 'un', 'une']);
+function openModifiers() {
+  const ds = activeDataset();
+  if (!ds) { toast('Upload a dataset first.', true); return; }
+  const tok = (s) => s.toLowerCase().split(/[^\p{L}\p{N}]+/u).filter(Boolean);
+  const n = ds.keywords.length;
+  const uni = new Map(), bi = new Map();
+  const bump = (map, key, k) => { let e = map.get(key); if (!e) { e = { vol: 0, count: 0, ex: '' }; map.set(key, e); } e.vol += k.avgMonthly; e.count++; if (!e.ex || k.avgMonthly > e.exVol) { e.ex = k.keyword; e.exVol = k.avgMonthly; } };
+  for (const k of ds.keywords) {
+    const ts = tok(k.lower);
+    const seen = new Set();
+    for (const t of ts) { if (t.length < 3 || MOD_STOP.has(t) || /^\d+$/.test(t) || seen.has(t)) continue; seen.add(t); bump(uni, t, k); }
+    for (let i = 0; i < ts.length - 1; i++) { const bg = ts[i] + ' ' + ts[i + 1]; if (ts[i].length < 3 || ts[i + 1].length < 3) continue; bump(bi, bg, k); }
+  }
+  const rank = (map) => [...map.entries()].filter(([, e]) => e.count >= 2 && e.count < n * 0.6).map(([k, e]) => ({ term: k, ...e })).sort((a, b) => b.vol - a.vol).slice(0, 25);
+  const unis = rank(uni), bis = rank(bi);
+  const rows = (list) => list.map((m) => `<tr><td>${escapeHtml(m.term)}</td><td class="num">${fmt(m.vol)}</td><td class="num">${fmt(m.count)}</td><td style="color:var(--muted)">${escapeHtml(m.ex)}</td></tr>`).join('');
+  const body = `
+    <div class="mod-cols">
+      <div><div class="suggest-group">Single words</div><table class="kw-table mod-table"><thead><tr><th>Modifier</th><th class="num">Volume</th><th class="num">#</th><th>Example</th></tr></thead><tbody>${rows(unis)}</tbody></table></div>
+      <div><div class="suggest-group">Phrases (2-word)</div><table class="kw-table mod-table"><thead><tr><th>Phrase</th><th class="num">Volume</th><th class="num">#</th><th>Example</th></tr></thead><tbody>${rows(bis)}</tbody></table></div>
+    </div>`;
+  const copy = 'WORDS\n' + unis.map((m) => `${m.term}\t${m.vol}`).join('\n') + '\n\nPHRASES\n' + bis.map((m) => `${m.term}\t${m.vol}`).join('\n');
+  openReport('Modifier explorer', `Recurring words & phrases in “${escapeHtml(ds.label || ds.fileName)}”, by search volume. Use these to spot sub-topics and ad-groups.`, body, copy);
+}
+
 // ---------- Content brief generator (per pillar) ----------
 function openBrief(pillarId) {
   const r = resultsById[pillarId];
@@ -966,8 +1030,8 @@ function currentDetailRows() {
 }
 function exportRows(format) {
   const rows = currentDetailRows();
-  const aoa = [['Keyword', 'Avg. monthly searches', 'Opportunity', 'Intent', 'CPC (avg)', 'Competition index', 'Three month change', 'YoY change']];
-  rows.forEach((k) => aoa.push([k.keyword, k.avgMonthly, k.opportunity, (INTENT_META[k.intent] || INTENT_META.other).label, k.cpc != null ? +k.cpc.toFixed(2) : '', k.competitionIndex ?? '', k.threeMonth, k.yoy]));
+  const aoa = [['Keyword', 'Avg. monthly searches', 'Clicks #1 (est)', 'Opportunity', 'Intent', 'CPC (avg)', 'Competition index', 'Three month change', 'YoY change']];
+  rows.forEach((k) => aoa.push([k.keyword, k.avgMonthly, k.clickPotential, k.opportunity, (INTENT_META[k.intent] || INTENT_META.other).label, k.cpc != null ? +k.cpc.toFixed(2) : '', k.competitionIndex ?? '', k.threeMonth, k.yoy]));
   let label = 'keywords';
   if (detailKey === '__uncovered__') label = 'uncovered';
   else if (detailKey && detailKey.startsWith('__ungrouped__:')) label = (ungroupedPillar(detailKey)?.cluster.name || 'pillar') + '_ungrouped';
@@ -1092,6 +1156,7 @@ function init() {
   $('#exportAllBtn').onclick = exportWorkbook;
   $('#adsBtn').onclick = exportGoogleAds;
   $('#dupBtn').onclick = openDuplicates;
+  $('#modBtn').onclick = openModifiers;
   $('#reportCloseBtn').onclick = () => $('#reportDialog').close();
   $('#reportCopyBtn').onclick = () => { navigator.clipboard?.writeText(reportCopyText); toast('Copied to clipboard'); };
 

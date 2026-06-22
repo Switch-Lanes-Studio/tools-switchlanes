@@ -19,34 +19,34 @@ export const Q_WORDS = new Set([
 
 const TRANSACTIONAL = new Set([
   // EN
-  'buy', 'order', 'book', 'booking', 'deal', 'deals', 'cheap', 'cheapest', 'price', 'prices', 'cost', 'costs', 'discount', 'coupon', 'hire', 'rent', 'subscribe', 'download', 'quote',
+  'buy', 'order', 'book', 'booking', 'deal', 'deals', 'cheap', 'cheapest', 'price', 'prices', 'pricing', 'cost', 'costs', 'discount', 'coupon', 'hire', 'rent', 'rental', 'lease', 'leasing', 'subscribe', 'subscription', 'download', 'trial', 'demo', 'quote', 'shop', 'sale',
   // NL
-  'boeken', 'boek', 'kopen', 'koop', 'prijs', 'prijzen', 'kosten', 'goedkoop', 'goedkope', 'goedkoopste', 'aanbieding', 'aanbiedingen', 'korting', 'reserveren', 'reservering', 'aanbod', 'betaalbare', 'betaalbaar',
+  'boeken', 'boek', 'kopen', 'koop', 'koopt', 'prijs', 'prijzen', 'prijslijst', 'kosten', 'kost', 'tarief', 'tarieven', 'goedkoop', 'goedkope', 'goedkoopste', 'aanbieding', 'aanbiedingen', 'korting', 'reserveren', 'reservering', 'aanbod', 'betaalbare', 'betaalbaar', 'huren', 'huur', 'lease', 'leasen', 'leasing', 'leasecontract', 'abonnement', 'offerte', 'bestellen', 'bestel', 'financiering', 'afbetaling', 'tweedehands', 'inschrijven',
   // FR
-  'acheter', 'reserver', 'réserver', 'reservation', 'réservation', 'prix', 'commander', 'promo', 'réduction', 'reduction', 'devis',
+  'acheter', 'achat', 'reserver', 'réserver', 'reservation', 'réservation', 'prix', 'tarif', 'tarifs', 'commander', 'promo', 'réduction', 'reduction', 'devis', 'louer', 'location', 'abonnement', 'leasing',
 ]);
-const TRANS_PHRASES = [/all[- ]?in(clusive)?/, /last ?minute/, /pas cher/, /near me/];
+const TRANS_PHRASES = [/all[- ]?in(clusive)?/, /last ?minute/, /pas cher/, /near me/, /in de buurt/, /te koop/, /kopen online/, /online kopen/, /for sale/];
 
 const COMMERCIAL = new Set([
   // EN
-  'best', 'top', 'review', 'reviews', 'vs', 'versus', 'comparison', 'compare', 'alternative', 'alternatives', 'ideas', 'examples',
+  'best', 'top', 'review', 'reviews', 'vs', 'versus', 'comparison', 'compare', 'alternative', 'alternatives', 'ideas', 'examples', 'which', 'recommended', 'pros', 'cons',
   // NL
-  'beste', 'vergelijken', 'vergelijking', 'ervaring', 'ervaringen', 'aanrader', 'ideeen', 'ideeën', 'inspiratie', 'voorbeelden', 'mooiste', 'populairste', 'leukste', 'mooie', 'unieke', 'originele', 'luxe', 'luxueuze',
+  'beste', 'vergelijken', 'vergelijking', 'vergelijk', 'review', 'reviews', 'ervaring', 'ervaringen', 'aanrader', 'ideeen', 'ideeën', 'inspiratie', 'voorbeelden', 'mooiste', 'populairste', 'leukste', 'mooie', 'unieke', 'originele', 'luxe', 'luxueuze', 'welke', 'voordelen', 'nadelen', 'voorwaarden', 'alternatief', 'alternatieven', 'particulier', 'zakelijk', 'werkgever',
   // FR
-  'meilleur', 'meilleure', 'comparatif', 'avis', 'idées', 'idees', 'exemples',
+  'meilleur', 'meilleure', 'comparatif', 'avis', 'idées', 'idees', 'exemples', 'quel', 'quelle', 'avantages', 'inconvénients', 'alternatives',
 ]);
 
 const INFORMATIONAL = new Set([
-  'guide', 'tips', 'meaning', 'tutorial', 'checklist',
-  'gids', 'betekenis', 'uitleg', 'planning', 'plannen',
-  'conseils', 'signification',
+  'guide', 'tips', 'meaning', 'tutorial', 'checklist', 'definition', 'explained', 'works',
+  'gids', 'betekenis', 'uitleg', 'planning', 'plannen', 'regels', 'mogelijkheden', 'werkt', 'voorbeeld', 'info', 'informatie',
+  'conseils', 'signification', 'fonctionne',
 ]);
 
 // Curated, compact signal sets used when proposing intent-based categories
 // (the full sets above would make an unwieldy rule).
 export const INTENT_SUGGEST_TERMS = {
-  transactional: ['boeken', 'prijs', 'kosten', 'goedkope', 'betaalbare', 'aanbieding', 'last minute', 'all inclusive', 'book', 'price', 'cheap', 'deal'],
-  commercial: ['beste', 'top', 'vergelijken', 'review', 'mooiste', 'ideeen', 'best', 'vs', 'review'],
+  transactional: ['boeken', 'prijs', 'kosten', 'tarief', 'goedkope', 'betaalbare', 'aanbieding', 'huren', 'lease', 'leasing', 'offerte', 'last minute', 'all inclusive', 'book', 'price', 'cheap', 'deal'],
+  commercial: ['beste', 'top', 'vergelijken', 'review', 'ervaringen', 'voordelen', 'nadelen', 'particulier', 'zakelijk', 'mooiste', 'ideeen', 'best', 'vs'],
 };
 
 export const INTENT_META = {
