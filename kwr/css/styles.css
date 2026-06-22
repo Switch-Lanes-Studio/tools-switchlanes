@@ -124,6 +124,14 @@ body {
 .card-actions { display: flex; gap: 8px; align-items: center; }
 .card-actions select { background: var(--panel-2); border: 1px solid var(--line); color: var(--text); padding: 6px 8px; border-radius: 7px; }
 
+/* Report dialog (duplicates, briefs) */
+.report-body { max-height: 56vh; overflow-y: auto; }
+.dup-group { background: var(--panel-2); border: 1px solid var(--line); border-radius: 8px; padding: 9px 11px; margin-bottom: 6px; }
+.dup-head { margin-bottom: 4px; }
+.dup-head .meta, .dup-vars .meta { color: var(--muted); font-size: 11px; }
+.dup-vars { color: var(--text); font-size: 12px; line-height: 1.7; }
+.brief { white-space: pre-wrap; font: 12px/1.55 ui-monospace, Menlo, monospace; color: var(--text); background: var(--panel-2); border: 1px solid var(--line); border-radius: 8px; padding: 12px; margin: 0; }
+
 /* Pillar breakdown */
 .pillar-breakdown { margin-bottom: 12px; }
 .pb-title { color: var(--muted); font-size: 12px; margin-bottom: 6px; }

@@ -79,6 +79,8 @@
               <button id="exportCsvBtn" class="btn small ghost">Export CSV</button>
               <button id="exportXlsxBtn" class="btn small ghost">Export Excel</button>
               <button id="exportAllBtn" class="btn small ghost" title="One Excel workbook: overview + a sheet per pillar">Export all</button>
+              <button id="dupBtn" class="btn small ghost" title="Find near-duplicate keywords that should share one page">Duplicates</button>
+              <button id="adsBtn" class="btn small ghost" title="Export a Google Ads CSV: ad-groups, match types, Max CPC, negatives">Ads CSV</button>
             </div>
           </div>
           <div id="pillarBreakdown" class="pillar-breakdown" hidden></div>
@@ -146,6 +148,19 @@
       <button type="button" id="suggestCancelBtn" class="btn ghost">Cancel</button>
       <button type="button" id="suggestMergeBtn" class="btn ghost">Merge selected</button>
       <button type="button" id="suggestAddBtn" class="btn">Add selected</button>
+    </div>
+  </dialog>
+
+  <!-- Generic report dialog (duplicates, content brief) -->
+  <dialog id="reportDialog" class="dialog wide">
+    <div class="suggest-head">
+      <h3 id="reportTitle">Report</h3>
+      <p id="reportSubtitle" class="hint" style="margin:0"></p>
+    </div>
+    <div id="reportBody" class="report-body"></div>
+    <div class="dialog-actions">
+      <button type="button" id="reportCopyBtn" class="btn ghost">Copy</button>
+      <button type="button" id="reportCloseBtn" class="btn">Close</button>
     </div>
   </dialog>
 

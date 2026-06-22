@@ -3,7 +3,7 @@ import { parseGkp, monthLabel, MONTH_LABELS } from './parser.js';
 import { runProjectTree, isPillar, uncovered, seasonality } from './engine.js';
 import { sampleDatasets, sampleClusters } from './sample.js';
 import { suggestCategories } from './suggest.js';
-import { annotateIntents, INTENT_META, INTENT_ACTION } from './intent.js';
+import { annotateIntents, INTENT_META, INTENT_ACTION, isQuestion } from './intent.js';
 
 const AUTOSAVE_KEY = 'kct.autosave.v1';
 const PALETTE = ['#4f8cff', '#36c08e', '#ffb454', '#ff5c6c', '#b072ff', '#26c6da', '#f06292', '#9ccc65', '#ffca28', '#8d6e63'];
@@ -257,6 +257,7 @@ function clusterItem(c, isSub) {
       <span class="meta" style="color:var(--muted);font-size:11px">${r ? fmt(r.count) + ' keywords' : ''}</span>
       <span class="actions">
         ${!isSub ? `<button class="btn tiny ghost" data-suggest="${c.id}" title="Suggest subtopics within this pillar">✨ sub</button>` : ''}
+        ${!isSub ? `<button class="btn tiny ghost" data-brief="${c.id}" title="Generate an SEO content brief for this pillar">📄</button>` : ''}
         <button class="btn tiny" data-edit="${c.id}">Edit</button>
         <button class="btn tiny" data-view="${c.id}">View</button>
         <button class="icon-btn" data-delc="${c.id}">✕</button>
@@ -269,6 +270,7 @@ function clusterItem(c, isSub) {
       renderClusters();
     };
     el.querySelector('[data-suggest]').onclick = () => openSuggestDialog(c.id);
+    el.querySelector('[data-brief]').onclick = () => openBrief(c.id);
   }
   el.querySelector('[data-sel]').onchange = (e) => {
     if (e.target.checked) selectedClusters.add(c.id); else selectedClusters.delete(c.id);
@@ -823,6 +825,130 @@ function exportWorkbook() {
   toast(`Exported ${pillarsList().length + 1} sheets`);
 }
 
+// ---------- Generic report dialog ----------
+let reportCopyText = '';
+function openReport(title, subtitle, bodyHtml, copyText) {
+  $('#reportTitle').textContent = title;
+  $('#reportSubtitle').textContent = subtitle || '';
+  $('#reportBody').innerHTML = bodyHtml;
+  reportCopyText = copyText || '';
+  $('#reportCopyBtn').style.display = copyText ? '' : 'none';
+  $('#reportDialog').showModal();
+}
+
+// ---------- Ad-group assignment (one keyword → one ad-group) ----------
+function termsOf(cluster) {
+  const out = [];
+  for (const r of cluster.includes || []) if (r.mode !== 'regex') out.push(...(r.terms || []));
+  return out;
+}
+function leafAssignment(ds) {
+  const leaves = state.clusters.filter((c) => !state.clusters.some((x) => x.parentId === c.id)); // no children
+  const pillarName = (c) => { const p = c.parentId ? state.clusters.find((x) => x.id === c.parentId) : c; return (p || c).name; };
+  const claimedBy = new Map();
+  for (const leaf of leaves) {
+    const r = resultsById[leaf.id];
+    if (!r) continue;
+    for (const k of r.matched) { const a = claimedBy.get(k.lower) || []; a.push({ leaf, r }); claimedBy.set(k.lower, a); }
+  }
+  const pillarSets = pillarsList().filter((p) => state.clusters.some((x) => x.parentId === p.id))
+    .map((p) => ({ p, set: new Set((resultsById[p.id]?.matched || []).map((k) => k.lower)) }));
+  const groups = new Map();
+  const ensure = (campaign, adGroup, cluster) => { const key = campaign + '|||' + adGroup; if (!groups.has(key)) groups.set(key, { campaign, adGroup, cluster, keywords: [] }); return groups.get(key); };
+  let overlap = 0;
+  for (const k of ds.keywords) {
+    const cands = claimedBy.get(k.lower);
+    if (cands && cands.length) {
+      if (cands.length > 1) overlap++;
+      cands.sort((a, b) => b.r.totalOpportunity - a.r.totalOpportunity || a.r.count - b.r.count); // best/most-specific
+      const leaf = cands[0].leaf;
+      ensure(pillarName(leaf), leaf.name, leaf).keywords.push(k);
+    } else {
+      const pm = pillarSets.find((x) => x.set.has(k.lower));
+      if (pm) ensure(pm.p.name, pm.p.name + ' – general', null).keywords.push(k);
+    }
+  }
+  return { groups, overlap };
+}
+function exportGoogleAds() {
+  const ds = activeDataset();
+  if (!ds) { toast('Upload a dataset first.', true); return; }
+  if (!state.clusters.length) { toast('Create some categories first.', true); return; }
+  const { groups, overlap } = leafAssignment(ds);
+  const byCampaign = {};
+  for (const g of groups.values()) (byCampaign[g.campaign] = byCampaign[g.campaign] || []).push(g);
+  const rows = [['Campaign', 'Ad Group', 'Keyword', 'Criterion Type', 'Max CPC']];
+  for (const g of groups.values()) {
+    for (const k of g.keywords) {
+      const cpc = k.bidHigh != null ? k.bidHigh.toFixed(2) : (k.cpc != null ? k.cpc.toFixed(2) : '');
+      rows.push([g.campaign, g.adGroup, k.keyword, 'Phrase', cpc]);
+      rows.push([g.campaign, g.adGroup, k.keyword, 'Exact', cpc]);
+    }
+  }
+  // Cross-group negatives: each ad-group excludes its siblings' terms.
+  for (const g of groups.values()) {
+    if (!g.cluster) continue;
+    const own = new Set(termsOf(g.cluster));
+    const negs = new Set();
+    for (const s of byCampaign[g.campaign]) if (s !== g && s.cluster) for (const t of termsOf(s.cluster)) if (!own.has(t)) negs.add(t);
+    for (const t of negs) rows.push([g.campaign, g.adGroup, t, 'Negative Phrase', '']);
+  }
+  const csv = rows.map((r) => r.map(csvCell).join(',')).join('\n');
+  const fname = (state.name || ds.label || 'google-ads').replace(/[^\w-]+/g, '_');
+  downloadBlob(new Blob([csv], { type: 'text/csv' }), `${fname}_google-ads.csv`);
+  toast(`Exported ${groups.size} ad-groups${overlap ? ` · ${fmt(overlap)} overlapping keywords auto-assigned` : ''}`);
+}
+
+// ---------- Near-duplicate detection (SEO consolidation) ----------
+function normalizeKw(s) {
+  return s.toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[^a-z0-9\s]/g, ' ')
+    .split(/\s+/).filter(Boolean).map((t) => (t.length > 4 ? t.replace(/(en|s)$/, '') : t)).sort().join(' ');
+}
+function openDuplicates() {
+  const ds = activeDataset();
+  if (!ds) { toast('Upload a dataset first.', true); return; }
+  const map = new Map();
+  for (const k of ds.keywords) { const key = normalizeKw(k.keyword); const a = map.get(key) || []; a.push(k); map.set(key, a); }
+  const groups = [...map.values()].filter((a) => a.length > 1)
+    .map((a) => ({ kws: a.sort((x, y) => y.avgMonthly - x.avgMonthly), vol: a.reduce((s, x) => s + x.avgMonthly, 0) }))
+    .sort((a, b) => b.vol - a.vol);
+  if (!groups.length) { openReport('Near-duplicate keywords', 'None found — no trivial variants in this dataset.', '<div class="suggest-empty">Nothing to consolidate.</div>', ''); return; }
+  const dupKw = groups.reduce((s, g) => s + g.kws.length, 0);
+  const body = groups.slice(0, 200).map((g) => `<div class="dup-group">
+      <div class="dup-head"><strong>${escapeHtml(g.kws[0].keyword)}</strong> <span class="meta">target page · ${fmt(g.vol)} combined</span></div>
+      <div class="dup-vars">${g.kws.map((k) => `${escapeHtml(k.keyword)} <span class="meta">(${fmt(k.avgMonthly)})</span>`).join(' · ')}</div>
+    </div>`).join('');
+  const copy = groups.map((g) => `# ${g.kws[0].keyword} (${g.vol})\n` + g.kws.map((k) => `- ${k.keyword} (${k.avgMonthly})`).join('\n')).join('\n\n');
+  openReport('Near-duplicate keywords', `${groups.length} groups · ${fmt(dupKw)} keywords that likely belong on one page each. Consolidate around the bold term.`, body, copy);
+}
+
+// ---------- Content brief generator (per pillar) ----------
+function openBrief(pillarId) {
+  const r = resultsById[pillarId];
+  const c = state.clusters.find((x) => x.id === pillarId);
+  if (!r || !c) return;
+  const act = INTENT_ACTION[dominantIntent(r)] || INTENT_ACTION.other;
+  const primary = r.matched[0];
+  const questions = r.matched.filter((k) => isQuestion(k.lower)).slice(0, 10);
+  const include = [...r.matched].sort((a, b) => (b.opportunity || 0) - (a.opportunity || 0)).slice(0, 15);
+  const subs = childrenOf(pillarId).map((k) => k.name);
+  const md = [
+    `# Content brief: ${c.name}`,
+    `**Recommended format:** ${act.seo}`,
+    `**Primary keyword:** ${primary ? primary.keyword + ' (' + primary.avgMonthly + '/mo)' : '—'}`,
+    `**Total demand:** ${r.totalVolume}/mo across ${r.count} keywords`,
+    subs.length ? `**Subtopics to cover:** ${subs.join(', ')}` : '',
+    '',
+    '## Suggested H2s (from real questions)',
+    questions.length ? questions.map((k) => `- ${k.keyword}`).join('\n') : '- (no question keywords found — use the subtopics above as sections)',
+    '',
+    '## Terms to include (highest opportunity)',
+    include.map((k) => `- ${k.keyword} (${k.avgMonthly}/mo)`).join('\n'),
+  ].filter((x) => x !== '').join('\n');
+  const body = `<pre class="brief">${escapeHtml(md)}</pre>`;
+  openReport(`Content brief — ${c.name}`, 'Copy into your doc / CMS. Generated from this pillar’s keywords.', body, md);
+}
+
 function changeClass(v) {
   if (!v) return '';
   if (v.startsWith('-')) return 'neg';
@@ -964,6 +1090,10 @@ function init() {
   $('#exportCsvBtn').onclick = () => exportRows('csv');
   $('#exportXlsxBtn').onclick = () => exportRows('xlsx');
   $('#exportAllBtn').onclick = exportWorkbook;
+  $('#adsBtn').onclick = exportGoogleAds;
+  $('#dupBtn').onclick = openDuplicates;
+  $('#reportCloseBtn').onclick = () => $('#reportDialog').close();
+  $('#reportCopyBtn').onclick = () => { navigator.clipboard?.writeText(reportCopyText); toast('Copied to clipboard'); };
 
   // Cluster dialog
   document.querySelectorAll('[data-add]').forEach((btn) => {
